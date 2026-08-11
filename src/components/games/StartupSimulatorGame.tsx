@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { ArrowLeft, Trophy } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { ArrowLeft, Trophy, CheckCircle2, XCircle } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { soundFx } from '../../utils/audio';
 
@@ -8,27 +8,29 @@ interface StartupSimulatorGameProps {
   onBack: () => void;
 }
 
+interface DecisionOption {
+  label: string;
+  cost: number;
+  valueAdded: number;
+  isOptimal: boolean;
+  feedback: string;
+}
+
 interface DecisionRound {
   id: number;
   stageName: string;
   category: string;
   scenario: string;
   icon: string;
-  options: {
-    label: string;
-    cost: number;
-    valueAdded: number;
-    isOptimal: boolean;
-    feedback: string;
-  }[];
+  options: DecisionOption[];
 }
 
 const STARTUP_ROUNDS: DecisionRound[] = [
   {
     id: 1,
-    stageName: 'Round 1: Brand & Identity',
+    stageName: 'Round 1: Brand & Identity Protection',
     category: 'Trademarks',
-    scenario: 'You created your tech startup brand name "TechVeda". A competitor tries to sell knockoff apps under a similar name "TechVeda Pro".',
+    scenario: 'You launched your tech startup under the brand name "TechVeda". A rival firm attempts to market a clone app named "TechVeda Pro". How do you protect your brand identity?',
     icon: 'ShieldCheck',
     options: [
       {
@@ -36,87 +38,152 @@ const STARTUP_ROUNDS: DecisionRound[] = [
         cost: 2000,
         valueAdded: 25000,
         isOptimal: true,
-        feedback: 'Optimal Choice! Registering your trademark grants exclusive rights and legal protection against copycats nationwide!'
+        feedback: 'Optimal Choice! Official trademark registration grants nationwide exclusive legal rights and deters counterfeiters!'
       },
       {
-        label: 'Ignore the competitor and don\'t file trademark registration',
+        label: 'Ignore the rival copycat and hope customers notice the quality difference',
         cost: 0,
         valueAdded: 0,
         isOptimal: false,
-        feedback: 'Poor decision. Without a registered trademark, competitors can steal your brand goodwill and confuse consumers.'
+        feedback: 'Poor decision. Without a registered trademark, competitors can steal your brand goodwill and confuse buyers.'
+      },
+      {
+        label: 'File a Copyright application for the brand name word text',
+        cost: 1000,
+        valueAdded: 2000,
+        isOptimal: false,
+        feedback: 'Incorrect category! Short brand names and titles are protected under Trademarks, NOT Copyrights.'
+      },
+      {
+        label: 'Change your company name every month to stay ahead of copycats',
+        cost: 5000,
+        valueAdded: 0,
+        isOptimal: false,
+        feedback: 'Terrible strategy! Constantly changing your brand name destroys customer recognition and wastes capital.'
       }
     ]
   },
   {
     id: 2,
-    stageName: 'Round 2: Hardware Innovation',
+    stageName: 'Round 2: Hardware & AI Circuit Innovation',
     category: 'Patents',
-    scenario: 'Your team invented an ultra-fast neural AI chip that cuts drone battery usage by 60%. Investors want to invest ₹50 Lakhs.',
+    scenario: 'Your engineering team invented a revolutionary AI microchip that cuts drone battery consumption by 60%. Venture Capitalists want to invest ₹50 Lakhs.',
     icon: 'Lightbulb',
     options: [
       {
-        label: 'File a Patent application for the novel hardware circuit before launching',
+        label: 'File a Patent application for the novel hardware circuit mechanism before launching',
         cost: 5000,
         valueAdded: 50000,
         isOptimal: true,
-        feedback: 'Excellent! Filing a patent secures your 20-year exclusive manufacturing rights and boosts investor valuation!'
+        feedback: 'Excellent! Securing a patent grants 20 years of exclusive manufacturing rights and drastically increases startup valuation!'
       },
       {
-        label: 'Publish the full circuit schematics publicly online without filing a patent',
+        label: 'Publish the complete circuit schematics publicly online on a blog without filing a patent',
         cost: 0,
         valueAdded: 500,
         isOptimal: false,
-        feedback: 'Critical mistake! Publicly disclosing your invention destroys its Novelty, preventing you from ever patenting it.'
+        feedback: 'Critical mistake! Publicly disclosing your invention destroys Novelty, legally forfeiting your right to patent it.'
+      },
+      {
+        label: 'Register the microchip circuit under Trademark law',
+        cost: 2000,
+        valueAdded: 0,
+        isOptimal: false,
+        feedback: 'Incorrect category! Trademarks protect brand logos, not technical circuit inventions.'
+      },
+      {
+        label: 'Keep the microchip hidden in a drawer and never manufacture or sell it',
+        cost: 0,
+        valueAdded: 0,
+        isOptimal: false,
+        feedback: 'Counter-productive! Innovation must be commercialized or licensed to generate commercial value.'
       }
     ]
   },
   {
     id: 3,
-    stageName: 'Round 3: Mobile App & Codebase',
+    stageName: 'Round 3: Mobile App & Source Code Protection',
     category: 'Copyrights',
-    scenario: 'You wrote 20,000 lines of custom React & Python code for your mobile app control dashboard.',
+    scenario: 'Your developers authored 20,000 lines of proprietary React & Python code for your mobile app control dashboard.',
     icon: 'Music',
     options: [
       {
-        label: 'Enforce Copyright © ownership and include Fair Use terms in End User License Agreement',
+        label: 'Enforce Copyright © ownership and attach an End User License Agreement (EULA)',
         cost: 1000,
         valueAdded: 15000,
         isOptimal: true,
-        feedback: 'Smart move! Source code is protected under Copyright law automatically, and clear licensing prevents software piracy.'
+        feedback: 'Smart move! Source code is automatically protected under Copyright law, and clear EULAs stop software piracy.'
       },
       {
-        label: 'Leave code uncredited without license notices',
+        label: 'Sell unencrypted source code ZIP files publicly without any copyright notice or license',
+        cost: 0,
+        valueAdded: 1000,
+        isOptimal: false,
+        feedback: 'High risk! Without license notices, competitors can freely copy and resell your software.'
+      },
+      {
+        label: 'Try to register the software source code as an Industrial Design',
+        cost: 2000,
+        valueAdded: 0,
+        isOptimal: false,
+        feedback: 'Wrong IP category! Industrial Designs protect 3D aesthetic shapes, not lines of code.'
+      },
+      {
+        label: 'Delete the source code repositories after app compilation',
         cost: 0,
         valueAdded: 0,
         isOptimal: false,
-        feedback: 'Risky! Clear ownership tags and copyright notices safeguard your software IP.'
+        feedback: 'Destructive! Deleting your source code prevents future updates and destroys your core asset.'
       }
     ]
   },
   {
     id: 4,
-    stageName: 'Round 4: Device Aesthetics',
+    stageName: 'Round 4: Product Casing & Aerodynamic Design',
     category: 'Industrial Designs',
-    scenario: 'Your drone has a sleek futuristic aerodynamic body shape designed by school industrial designers.',
+    scenario: 'Your designers sculpted a unique futuristic curved aerodynamic casing body for your drone.',
     icon: 'Palette',
     options: [
       {
-        label: 'Register the unique 3D visual body casing under Industrial Design Act at Design Office Kolkata',
+        label: 'Register the 3D aesthetic casing body under Industrial Design Act at Design Office Kolkata',
         cost: 2000,
         valueAdded: 20000,
         isOptimal: true,
-        feedback: 'Brilliant! Industrial Design registration protects your sleek product aesthetics from visual clones!'
+        feedback: 'Brilliant! Industrial Design registration locks down your product visual shape from competitor clones!'
       },
       {
-        label: 'Rely only on word of mouth',
+        label: 'Rely only on verbal promises from competitors not to copy your design',
         cost: 0,
         valueAdded: 0,
         isOptimal: false,
-        feedback: 'Without design registration, rivals can clone your exact product shape with impunity.'
+        feedback: 'Naive choice. Competitors can legally replicate your product shape unless registered as an Industrial Design.'
+      },
+      {
+        label: 'Apply for a Geographical Indication (GI) tag for your drone casing',
+        cost: 3000,
+        valueAdded: 0,
+        isOptimal: false,
+        feedback: 'Incorrect! GI tags protect region-specific goods like Darjeeling Tea, not modern manufactured electronics.'
+      },
+      {
+        label: 'Cover the drone in plain cardboard so no one sees the shape',
+        cost: 500,
+        valueAdded: 0,
+        isOptimal: false,
+        feedback: 'Impractical! Aesthetic design is a major selling factor that should be registered, not hidden.'
       }
     ]
   }
 ];
+
+const shuffleArray = <T,>(array: T[]): T[] => {
+  const arr = [...array];
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr;
+};
 
 export const StartupSimulatorGame: React.FC<StartupSimulatorGameProps> = ({ onComplete, onBack }) => {
   const [currentRoundIndex, setCurrentRoundIndex] = useState(0);
@@ -126,15 +193,25 @@ export const StartupSimulatorGame: React.FC<StartupSimulatorGameProps> = ({ onCo
   const [answered, setAnswered] = useState(false);
   const [selectedOptIndex, setSelectedOptIndex] = useState<number | null>(null);
   const [isFinished, setIsFinished] = useState(false);
+  const [shuffledOptions, setShuffledOptions] = useState<DecisionOption[]>([]);
 
   const currentRound = STARTUP_ROUNDS[currentRoundIndex];
+
+  // Randomize options for each round so answer positions never repeat predictably
+  useEffect(() => {
+    if (currentRound) {
+      setShuffledOptions(shuffleArray(currentRound.options));
+      setAnswered(false);
+      setSelectedOptIndex(null);
+    }
+  }, [currentRoundIndex]);
 
   const handleChoose = (optIndex: number) => {
     if (answered) return;
     setSelectedOptIndex(optIndex);
     setAnswered(true);
 
-    const chosen = currentRound.options[optIndex];
+    const chosen = shuffledOptions[optIndex];
 
     if (chosen.isOptimal) {
       soundFx.playCorrect();
@@ -150,8 +227,6 @@ export const StartupSimulatorGame: React.FC<StartupSimulatorGameProps> = ({ onCo
     soundFx.playClick();
     if (currentRoundIndex < STARTUP_ROUNDS.length - 1) {
       setCurrentRoundIndex((prev) => prev + 1);
-      setAnswered(false);
-      setSelectedOptIndex(null);
     } else {
       setIsFinished(true);
       const calculatedStars = score >= 400 ? 3 : score >= 250 ? 2 : 1;
@@ -173,7 +248,7 @@ export const StartupSimulatorGame: React.FC<StartupSimulatorGameProps> = ({ onCo
         </button>
 
         <div className="text-center">
-          <span className="text-[10px] font-bold uppercase tracking-widest text-rose-400">Level 3: IP Empire Tycoon</span>
+          <span className="text-[10px] font-bold uppercase tracking-widest text-rose-400">Level 8: Final Mastermind</span>
           <h2 className="text-base font-black text-white">TechVeda Innovations Startup Simulator</h2>
         </div>
 
@@ -214,10 +289,10 @@ export const StartupSimulatorGame: React.FC<StartupSimulatorGameProps> = ({ onCo
           </div>
 
           <div className="space-y-3">
-            <h4 className="text-xs font-extrabold text-slate-400 uppercase tracking-wider">Select Founder IP Strategy:</h4>
+            <h4 className="text-xs font-extrabold text-slate-400 uppercase tracking-wider">Select Founder IP Strategy (Randomized Options):</h4>
 
-            <div className="space-y-3">
-              {currentRound.options.map((opt, idx) => {
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              {shuffledOptions.map((opt, idx) => {
                 let btnStyle = 'bg-slate-900 border-slate-800 text-slate-200 hover:border-rose-500/50';
 
                 if (answered) {
@@ -235,13 +310,15 @@ export const StartupSimulatorGame: React.FC<StartupSimulatorGameProps> = ({ onCo
                     key={idx}
                     disabled={answered}
                     onClick={() => handleChoose(idx)}
-                    className={`w-full p-4 rounded-2xl border text-left text-xs sm:text-sm font-semibold transition flex flex-col gap-1 ${btnStyle}`}
+                    className={`p-4 rounded-2xl border text-left text-xs sm:text-sm font-semibold transition flex flex-col justify-between gap-2 ${btnStyle}`}
                   >
-                    <div className="flex items-center justify-between w-full">
-                      <span className="font-extrabold">{opt.label}</span>
-                      <span className="text-xs font-bold text-amber-400 shrink-0">
+                    <span>{opt.label}</span>
+                    <div className="flex items-center justify-between w-full pt-2 border-t border-slate-800/60">
+                      <span className="text-[11px] font-bold text-amber-400">
                         {opt.cost > 0 ? `Cost: ₹${opt.cost}` : 'Free'}
                       </span>
+                      {answered && opt.isOptimal && <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />}
+                      {answered && selectedOptIndex === idx && !opt.isOptimal && <XCircle className="w-4 h-4 text-rose-400 shrink-0" />}
                     </div>
                   </button>
                 );
@@ -251,8 +328,8 @@ export const StartupSimulatorGame: React.FC<StartupSimulatorGameProps> = ({ onCo
 
           {answered && selectedOptIndex !== null && (
             <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800 text-xs text-slate-200 space-y-3 animate-fadeIn">
-              <div className="font-extrabold text-base text-amber-300">Strategy Result:</div>
-              <p className="leading-relaxed">{currentRound.options[selectedOptIndex].feedback}</p>
+              <div className="font-extrabold text-base text-amber-300">Strategy Evaluation:</div>
+              <p className="leading-relaxed">{shuffledOptions[selectedOptIndex].feedback}</p>
 
               <button
                 onClick={handleNextRound}
@@ -270,7 +347,7 @@ export const StartupSimulatorGame: React.FC<StartupSimulatorGameProps> = ({ onCo
           </div>
 
           <div className="space-y-2">
-            <h3 className="text-3xl font-black text-white">Startup Simulator Completed! 🚀</h3>
+            <h3 className="text-3xl font-black text-white">Final Level Completed! 🚀</h3>
             <p className="text-xs text-slate-300">You built a 100% compliant Indian IP startup portfolio valued at <strong>₹{portfolioValue.toLocaleString()}</strong>!</p>
           </div>
 

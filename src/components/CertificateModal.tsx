@@ -1,5 +1,5 @@
 import React, { useRef } from 'react';
-import { X, Award, Printer, CheckCircle2 } from 'lucide-react';
+import { X, Award, Printer, CheckCircle2, Lock } from 'lucide-react';
 import type { UserGameState } from '../utils/storage';
 import { soundFx } from '../utils/audio';
 
@@ -10,6 +10,8 @@ interface CertificateModalProps {
 
 export const CertificateModal: React.FC<CertificateModalProps> = ({ gameState, onClose }) => {
   const certificateRef = useRef<HTMLDivElement>(null);
+
+  const isFinalLevelCompleted = gameState.levelProgress['startup_simulator']?.completed;
 
   const handlePrint = () => {
     soundFx.playClick();
@@ -23,6 +25,47 @@ export const CertificateModal: React.FC<CertificateModalProps> = ({ gameState, o
   });
 
   const certId = `CIPAM-IPR-2026-${Math.floor(100000 + Math.random() * 900000)}`;
+
+  if (!isFinalLevelCompleted) {
+    return (
+      <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/85 backdrop-blur-md animate-fadeIn">
+        <div className="glass-card w-full max-w-lg rounded-3xl border border-amber-500/30 overflow-hidden shadow-2xl p-6 sm:p-8 text-center space-y-6">
+          <div className="w-20 h-20 mx-auto rounded-3xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-center text-amber-400">
+            <Lock className="w-10 h-10" />
+          </div>
+
+          <div className="space-y-2">
+            <div className="inline-block px-3 py-1 rounded-full bg-amber-500/10 text-amber-300 border border-amber-500/20 text-xs font-black uppercase tracking-wider">
+              Certificate Requirement
+            </div>
+            <h2 className="text-2xl font-black text-white">Official Merit Certificate Locked</h2>
+            <p className="text-xs text-slate-300 leading-relaxed">
+              The official <strong>CIPAM Youth IP Champion Certificate</strong> is awarded ONLY upon completing the entire curriculum through <strong>Level 8: TechVeda IP Empire Simulator</strong>!
+            </p>
+          </div>
+
+          <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800 text-left text-xs text-slate-400 space-y-2">
+            <div className="font-bold text-slate-200">How to Unlock:</div>
+            <div className="flex items-center gap-2">
+              <span className="text-amber-400 font-bold">1.</span>
+              <span>Pass Level 1 through Level 7 with at least 100 points per level.</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-amber-400 font-bold">2.</span>
+              <span>Complete Level 8 (Startup Tycoon Simulator).</span>
+            </div>
+          </div>
+
+          <button
+            onClick={() => { soundFx.playClick(); onClose(); }}
+            className="w-full py-3.5 rounded-2xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs transition shadow-xl shadow-amber-500/20"
+          >
+            Return to Quest Map & Play Levels
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/85 backdrop-blur-md animate-fadeIn print:p-0 print:bg-white print:static">
@@ -74,7 +117,7 @@ export const CertificateModal: React.FC<CertificateModalProps> = ({ gameState, o
                 Certificate of Merit
               </h1>
               <p className="text-xs md:text-sm text-slate-400 font-semibold uppercase tracking-wider print:text-slate-600">
-                Intellectual Property Awareness & Gamified Mastery
+                Intellectual Property Awareness & Curriculum Completion
               </p>
             </div>
 
@@ -85,48 +128,46 @@ export const CertificateModal: React.FC<CertificateModalProps> = ({ gameState, o
                 {gameState.profile.name}
               </div>
               <p className="text-sm font-bold text-amber-300 print:text-slate-800">
-                {gameState.profile.grade} • {gameState.profile.schoolName}
+                {gameState.profile.role === 'Teacher' ? '👨‍🏫 Educator' : gameState.profile.grade} • {gameState.profile.schoolName}
               </p>
             </div>
 
             {/* Citation */}
             <p className="text-xs md:text-sm text-slate-300 leading-relaxed max-w-xl mx-auto print:text-slate-800">
-              has successfully completed the interactive <strong className="text-amber-400 print:text-amber-700">CIPAM IP Quest Educational Curriculum</strong>, demonstrating mastery across <strong className="text-white print:text-slate-950">Patents, Trademarks, Copyrights, and Industrial Designs</strong>.
+              has successfully completed all 8 levels of the interactive <strong className="text-amber-400 print:text-amber-700">CIPAM IP Quest Curriculum</strong>, demonstrating mastery across <strong className="text-white print:text-slate-950">Patents, Trademarks, Copyrights, Industrial Designs, and Tech Startup Management</strong>.
             </p>
 
             {/* Score & Badges Summary */}
             <div className="grid grid-cols-3 gap-4 max-w-md mx-auto p-4 rounded-2xl bg-slate-900/90 border border-slate-800 print:border-amber-300 print:bg-amber-50">
               <div>
                 <div className="text-[10px] uppercase font-bold text-slate-400 print:text-slate-600">Final Score</div>
-                <div className="text-base font-black text-amber-400 print:text-amber-800">{gameState.totalScore} pts</div>
+                <div className="text-lg font-black text-amber-400 print:text-amber-700">{gameState.totalScore} pts</div>
               </div>
               <div>
-                <div className="text-[10px] uppercase font-bold text-slate-400 print:text-slate-600">IP Badges</div>
-                <div className="text-base font-black text-amber-400 print:text-amber-800">{gameState.badges.length} Unlocked</div>
+                <div className="text-[10px] uppercase font-bold text-slate-400 print:text-slate-600">Badges Unlocked</div>
+                <div className="text-lg font-black text-amber-400 print:text-amber-700">{gameState.badges.length} / 8</div>
               </div>
               <div>
-                <div className="text-[10px] uppercase font-bold text-slate-400 print:text-slate-600">Status</div>
-                <div className="text-xs font-black text-emerald-400 flex items-center justify-center gap-1 mt-1 print:text-emerald-700">
-                  <CheckCircle2 className="w-3.5 h-3.5" /> Certified
-                </div>
+                <div className="text-[10px] uppercase font-bold text-slate-400 print:text-slate-600">Final Level</div>
+                <div className="text-lg font-black text-emerald-400 print:text-emerald-700">Completed</div>
               </div>
             </div>
 
-            {/* Footer Signatures */}
-            <div className="pt-8 border-t border-slate-800 flex items-end justify-between text-left print:border-slate-300">
+            {/* Certificate Signatures & Footer */}
+            <div className="pt-6 border-t border-slate-800/80 flex flex-wrap justify-between items-end gap-4 text-left print:border-slate-300">
               <div>
-                <div className="text-xs font-bold text-slate-400 print:text-slate-600">Issued On:</div>
-                <div className="text-xs font-bold text-white print:text-slate-900">{currentDate}</div>
-                <div className="text-[10px] text-slate-500 font-mono mt-1">ID: {certId}</div>
+                <div className="text-[10px] text-slate-400 uppercase font-bold print:text-slate-600">Verification ID</div>
+                <div className="text-xs font-mono font-bold text-amber-400 print:text-slate-900">{gameState.profile.studentId || certId}</div>
+                <div className="text-[10px] text-slate-500">Issued: {currentDate}</div>
               </div>
 
-              <div className="text-center space-y-1">
-                <div className="w-32 h-10 border-b border-amber-400/50 mx-auto flex items-center justify-center font-serif text-amber-400 italic text-sm print:text-amber-700">
-                  CIPAM Director
-                </div>
-                <div className="text-[10px] uppercase font-bold text-slate-400 tracking-wider print:text-slate-700">
-                  CIPAM Educational Cell
-                </div>
+              <div className="flex items-center gap-2 text-emerald-400 font-bold text-xs bg-emerald-500/10 px-3 py-1.5 rounded-xl border border-emerald-500/30 print:border-emerald-600 print:text-emerald-800">
+                <CheckCircle2 className="w-4 h-4" /> Official CIPAM Seal
+              </div>
+
+              <div className="text-right">
+                <div className="text-xs font-black text-white print:text-slate-900">Head of IPR Awareness</div>
+                <div className="text-[10px] text-slate-400 print:text-slate-600">CIPAM, Govt. of India</div>
               </div>
             </div>
           </div>

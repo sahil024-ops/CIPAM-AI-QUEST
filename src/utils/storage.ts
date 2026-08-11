@@ -1,5 +1,7 @@
 // LocalStorage helper for student game state, progress, score, and badges
 
+export const MIN_SCORE_TO_PASS = 100; // Minimum score threshold required to pass level and unlock next tier
+
 export interface StudentProfile {
   name: string;
   avatar: string;
@@ -20,6 +22,17 @@ export interface LevelProgress {
   stars: number; // 0 to 3
 }
 
+export interface LevelGradeSheet {
+  levelId: string;
+  levelTitle: string;
+  score: number;
+  maxScore: number;
+  stars: number;
+  accuracyPercentage: number;
+  completedAt: string;
+  gradeCode: string; // e.g. "CIPAM-GRD-84920"
+}
+
 export interface UserGameState {
   profile: StudentProfile;
   totalScore: number;
@@ -27,6 +40,7 @@ export interface UserGameState {
   streak: number;
   completedLevels: string[];
   levelProgress: Record<string, LevelProgress>;
+  gradeSheets?: Record<string, LevelGradeSheet>;
   badges: string[]; // Badge IDs
   unlockedTitbits: string[];
   certificateEarned: boolean;
@@ -59,6 +73,7 @@ const DEFAULT_STATE: UserGameState = {
     'detective_case3': { levelId: 'detective_case3', unlocked: false, completed: false, score: 0, maxScore: 400, stars: 0 },
     'startup_simulator': { levelId: 'startup_simulator', unlocked: false, completed: false, score: 0, maxScore: 500, stars: 0 },
   },
+  gradeSheets: {},
   badges: [],
   unlockedTitbits: ['basmati_gi', 'turmeric_patent'],
   certificateEarned: false,
@@ -69,7 +84,11 @@ export const loadGameState = (): UserGameState => {
     const saved = localStorage.getItem(STORAGE_KEY);
     if (saved) {
       const parsed = JSON.parse(saved);
-      return { ...DEFAULT_STATE, ...parsed };
+      return { 
+        ...DEFAULT_STATE, 
+        ...parsed,
+        gradeSheets: parsed.gradeSheets || {} 
+      };
     }
   } catch (e) {
     console.error('Error loading game state from localStorage:', e);

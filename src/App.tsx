@@ -6,6 +6,7 @@ import { DidYouKnowModal } from './components/DidYouKnowModal';
 import { QuickRecapModal } from './components/QuickRecapModal';
 import { ClassroomMode } from './components/ClassroomMode';
 import { CertificateModal } from './components/CertificateModal';
+import { GradeSheetModal } from './components/GradeSheetModal';
 import { OnboardingModal } from './components/OnboardingModal';
 
 // Minigames
@@ -16,7 +17,7 @@ import { IndustrialDesignGame } from './components/games/IndustrialDesignGame';
 import { CaseDetectiveGame } from './components/games/CaseDetectiveGame';
 import { StartupSimulatorGame } from './components/games/StartupSimulatorGame';
 
-import { loadGameState, saveGameState } from './utils/storage';
+import { loadGameState, saveGameState, MIN_SCORE_TO_PASS } from './utils/storage';
 import type { UserGameState, LevelProgress } from './utils/storage';
 import { soundFx } from './utils/audio';
 import { logStudentGlobalProgress } from './services/classroomService';
@@ -31,6 +32,7 @@ export function App() {
   const [showTitbits, setShowTitbits] = useState(false);
   const [showClassroom, setShowClassroom] = useState(false);
   const [showCertificate, setShowCertificate] = useState(false);
+  const [showGradeSheetLevelId, setShowGradeSheetLevelId] = useState<string | null>(null);
   const [showOnboarding, setShowOnboarding] = useState<boolean>(() => !gameState.profile.isOnboarded);
 
   // Sync state to LocalStorage & Real-Time Database whenever gameState changes
@@ -68,9 +70,11 @@ export function App() {
         stars: 0
       };
 
+      const isPassed = earnedScore >= MIN_SCORE_TO_PASS;
+
       const updatedProg: LevelProgress = {
         ...existingProg,
-        completed: true,
+        completed: isPassed || existingProg.completed,
         score: Math.max(existingProg.score, earnedScore),
         stars: Math.max(existingProg.stars, earnedStars)
       };
@@ -80,26 +84,43 @@ export function App() {
         [levelId]: updatedProg
       };
 
-      // Determine next level to unlock
-      const levelSequence = [
-        'patents_basic',
-        'trademarks_basic',
-        'copyrights_basic',
-        'designs_basic',
-        'detective_case1',
-        'detective_case2',
-        'detective_case3',
-        'startup_simulator'
-      ];
+      // Create/Update Grade Sheet
+      const updatedGradeSheets = {
+        ...(prevState.gradeSheets || {}),
+        [levelId]: {
+          levelId,
+          levelTitle: levelId,
+          score: Math.max(existingProg.score, earnedScore),
+          maxScore: existingProg.maxScore,
+          stars: Math.max(existingProg.stars, earnedStars),
+          accuracyPercentage: Math.min(100, Math.round((earnedScore / existingProg.maxScore) * 100)),
+          completedAt: new Date().toISOString(),
+          gradeCode: `CIPAM-GRD-${Math.floor(10000 + Math.random() * 90000)}`
+        }
+      };
 
-      const currentIndex = levelSequence.indexOf(levelId);
-      if (currentIndex >= 0 && currentIndex < levelSequence.length - 1) {
-        const nextLevelId = levelSequence[currentIndex + 1];
-        if (updatedLevelProgress[nextLevelId]) {
-          updatedLevelProgress[nextLevelId] = {
-            ...updatedLevelProgress[nextLevelId],
-            unlocked: true
-          };
+      // Unlock next level ONLY IF score meets MIN_SCORE_TO_PASS threshold
+      if (isPassed) {
+        const levelSequence = [
+          'patents_basic',
+          'trademarks_basic',
+          'copyrights_basic',
+          'designs_basic',
+          'detective_case1',
+          'detective_case2',
+          'detective_case3',
+          'startup_simulator'
+        ];
+
+        const currentIndex = levelSequence.indexOf(levelId);
+        if (currentIndex >= 0 && currentIndex < levelSequence.length - 1) {
+          const nextLevelId = levelSequence[currentIndex + 1];
+          if (updatedLevelProgress[nextLevelId]) {
+            updatedLevelProgress[nextLevelId] = {
+              ...updatedLevelProgress[nextLevelId],
+              unlocked: true
+            };
+          }
         }
       }
 
@@ -117,7 +138,7 @@ export function App() {
       };
 
       const badgeForLevel = badgeMap[levelId];
-      if (badgeForLevel && !updatedBadges.includes(badgeForLevel)) {
+      if (badgeForLevel && isPassed && !updatedBadges.includes(badgeForLevel)) {
         updatedBadges.push(badgeForLevel);
         soundFx.playBadgeUnlock();
       }
@@ -130,16 +151,18 @@ export function App() {
 
       // Recalculate total score
       const newTotalScore = Object.values(updatedLevelProgress).reduce((acc, curr) => acc + curr.score, 0);
-
-      const completedLevelsList = Array.from(new Set([...prevState.completedLevels, levelId]));
+      const completedLevelsList = Array.from(new Set(
+        isPassed ? [...prevState.completedLevels, levelId] : prevState.completedLevels
+      ));
 
       return {
         ...prevState,
         totalScore: newTotalScore,
         completedLevels: completedLevelsList,
         levelProgress: updatedLevelProgress,
+        gradeSheets: updatedGradeSheets,
         badges: updatedBadges,
-        certificateEarned: completedCount >= 4
+        certificateEarned: completedCount >= 8
       };
     });
   };
@@ -208,25 +231,15 @@ export function App() {
         )}
       </main>
 
-      {/* Footer Branding */}
-      <footer className="border-t border-slate-900 bg-slate-950 py-6 text-center text-xs text-slate-500">
-        <div className="max-w-7xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-3">
-          <div>
-            <strong>CIPAM IP Quest</strong> • Cell for IPR Promotion and Management (Ministry of Commerce & Industry)
-          </div>
-          <div>Smart Education & Gamified Law Learning for Indian School Students</div>
-        </div>
-      </footer>
-
-      {/* Interactive Modals */}
+      {/* Modals & Overlays */}
       {showOnboarding && (
         <OnboardingModal
           gameState={gameState}
-          onComplete={(updatedState) => {
-            setGameState(updatedState);
+          onComplete={(updated) => {
+            setGameState(updated);
             setShowOnboarding(false);
           }}
-          onClose={gameState.profile.isOnboarded ? () => setShowOnboarding(false) : undefined}
+          onClose={() => setShowOnboarding(false)}
         />
       )}
 
@@ -234,16 +247,19 @@ export function App() {
         <Scoreboard
           gameState={gameState}
           onClose={() => setShowScoreboard(false)}
-          onUpdateState={(newState) => setGameState(newState)}
+          onUpdateState={(updated) => setGameState(updated)}
+          onOpenGradeSheet={(levelId) => {
+            setShowGradeSheetLevelId(levelId);
+          }}
         />
-      )}
-
-      {showTitbits && (
-        <DidYouKnowModal onClose={() => setShowTitbits(false)} />
       )}
 
       {showRecap && (
         <QuickRecapModal onClose={() => setShowRecap(false)} />
+      )}
+
+      {showTitbits && (
+        <DidYouKnowModal onClose={() => setShowTitbits(false)} />
       )}
 
       {showClassroom && (
@@ -251,10 +267,22 @@ export function App() {
       )}
 
       {showCertificate && (
-        <CertificateModal gameState={gameState} onClose={() => setShowCertificate(false)} />
+        <CertificateModal
+          gameState={gameState}
+          onClose={() => setShowCertificate(false)}
+        />
+      )}
+
+      {showGradeSheetLevelId && (
+        <GradeSheetModal
+          gameState={gameState}
+          levelId={showGradeSheetLevelId}
+          onClose={() => setShowGradeSheetLevelId(null)}
+        />
       )}
     </div>
   );
 }
 
 export default App;
+

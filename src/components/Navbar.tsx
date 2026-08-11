@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Award, Volume2, VolumeX, Sparkles, BookOpen, Users, Trophy, RotateCcw } from 'lucide-react';
+import { Award, Volume2, VolumeX, Sparkles, BookOpen, Users, Trophy, LogOut } from 'lucide-react';
 import { soundFx } from '../utils/audio';
 import type { UserGameState } from '../utils/storage';
 import { resetGameState } from '../utils/storage';
@@ -33,13 +33,16 @@ export const Navbar: React.FC<NavbarProps> = ({
     if (!muted) soundFx.playClick();
   };
 
-  const handleReset = () => {
-    if (window.confirm('Are you sure you want to reset all game progress and start fresh?')) {
+  const handleLogout = () => {
+    if (window.confirm('Are you sure you want to Log Out? Your progress is saved, and you will return to the Role Login screen.')) {
       const resetState = resetGameState();
       onStateReset(resetState);
+      onOpenOnboarding();
       soundFx.playClick();
     }
   };
+
+  const isTeacher = gameState.profile.role === 'Teacher';
 
   return (
     <header className="sticky top-0 z-40 glass-panel border-b border-slate-800 px-4 py-3 shadow-xl">
@@ -68,12 +71,16 @@ export const Navbar: React.FC<NavbarProps> = ({
         <div className="flex items-center gap-2 overflow-x-auto py-1 scrollbar-none">
           <button
             onClick={() => { soundFx.playClick(); onOpenOnboarding(); }}
-            className="flex items-center gap-1.5 text-xs font-bold px-3 py-1.5 rounded-xl bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/30 transition"
-            title="Edit Role & Login Details"
+            className={`flex items-center gap-1.5 text-xs font-bold px-3 py-1.5 rounded-xl border transition ${
+              isTeacher 
+                ? 'bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-300 border-indigo-500/30'
+                : 'bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border-amber-500/30'
+            }`}
+            title="Edit Role & Profile Details"
           >
             <span>{gameState.profile.avatar || '⚡'}</span>
-            <span className="truncate max-w-[130px]">
-              {gameState.profile.role === 'Teacher' ? '👩‍🏫 ' : '👦 '}
+            <span className="truncate max-w-[140px]">
+              {isTeacher ? '👨‍🏫 ' : '👦 '}
               {gameState.profile.name || 'Login Profile'}
             </span>
           </button>
@@ -109,7 +116,7 @@ export const Navbar: React.FC<NavbarProps> = ({
             <button
               onClick={() => { soundFx.playClick(); onOpenCertificate(); }}
               className="flex items-center gap-1.5 text-xs font-bold px-3 py-1.5 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 shadow-md shadow-amber-500/20 transition animate-bounce-gentle"
-              title="View IP Hero Certificate"
+              title="View Final Merit Certificate"
             >
               <Award className="w-4 h-4 text-slate-950" />
               <span>Certificate</span>
@@ -117,16 +124,18 @@ export const Navbar: React.FC<NavbarProps> = ({
           )}
         </div>
 
-        {/* Student Stats & Controls */}
+        {/* Student/Teacher Stats & Controls */}
         <div className="flex items-center gap-3">
-          {/* Score & XP Badge */}
+          {/* Score & Dashboard Badge */}
           <button
             onClick={() => { soundFx.playClick(); onOpenScoreboard(); }}
             className="flex items-center gap-2 bg-slate-900/90 border border-slate-700 hover:border-amber-500/50 px-3 py-1.5 rounded-2xl transition group"
           >
             <Trophy className="w-4 h-4 text-amber-400 group-hover:scale-110 transition" />
             <div className="text-left">
-              <div className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Score</div>
+              <div className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">
+                {isTeacher ? 'Educator Score' : 'Score'}
+              </div>
               <div className="text-xs font-black text-amber-400 flex items-center gap-1">
                 {gameState.totalScore} <span className="text-[10px] text-slate-400 font-normal">pts</span>
               </div>
@@ -142,13 +151,14 @@ export const Navbar: React.FC<NavbarProps> = ({
             {isMuted ? <VolumeX className="w-4 h-4 text-slate-500" /> : <Volume2 className="w-4 h-4 text-emerald-400" />}
           </button>
 
-          {/* Reset Progress */}
+          {/* Logout / Switch Profile */}
           <button
-            onClick={handleReset}
-            className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-rose-400 border border-slate-700 transition"
-            title="Reset Game Progress"
+            onClick={handleLogout}
+            className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-rose-400 border border-slate-700 transition flex items-center gap-1 font-bold text-xs"
+            title="Log Out & Switch Profile"
           >
-            <RotateCcw className="w-4 h-4" />
+            <LogOut className="w-4 h-4 text-rose-400" />
+            <span className="hidden md:inline">Log Out</span>
           </button>
         </div>
       </div>

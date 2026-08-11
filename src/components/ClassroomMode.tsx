@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { X, Users, Play, Timer, CheckCircle2, XCircle, Trophy, Sparkles, ArrowRight, RotateCcw, Key, LogIn, Wifi } from 'lucide-react';
+import { X, Users, Play, Timer, CheckCircle2, XCircle, Trophy, Sparkles, Key, LogIn, Wifi } from 'lucide-react';
 import { soundFx } from '../utils/audio';
 import { 
   createClassroomSession, 
@@ -84,7 +84,6 @@ export const ClassroomMode: React.FC<ClassroomModeProps> = ({ onClose }) => {
   // Student Join State
   const [inputCode, setInputCode] = useState('');
   const [studentNameInput, setStudentNameInput] = useState('');
-  const [joinSuccess, setJoinSuccess] = useState(false);
   const [codeError, setCodeError] = useState('');
   const [myStudentInfo, setMyStudentInfo] = useState<ClassroomStudent | null>(null);
 
@@ -176,12 +175,10 @@ export const ClassroomMode: React.FC<ClassroomModeProps> = ({ onClose }) => {
       const student = await joinClassroomSession(cleanCode, studentNameInput.trim());
       soundFx.playCorrect();
       setMyStudentInfo(student);
-      setJoinSuccess(true);
-
-      // If room is already playing, join live question arena directly
-      if (session && session.gameStage === 'Playing') {
-        setGameStage('Playing');
-        setCurrentQIndex(session.currentQIndex || 0);
+      // Auto-enter Playing stage immediately upon join so student sees questions right away
+      setGameStage('Playing');
+      if (session?.currentQIndex) {
+        setCurrentQIndex(session.currentQIndex);
       }
     } catch (err) {
       setCodeError('Failed to join classroom session. Check your network or room code.');
@@ -250,7 +247,6 @@ export const ClassroomMode: React.FC<ClassroomModeProps> = ({ onClose }) => {
     setIsAnswered(false);
     setScore(0);
     setTimeLeft(15);
-    setJoinSuccess(false);
 
     if (activeTab === 'TeacherHost') {
       await updateRoomStage(roomCode, 'Lobby', 0);
@@ -373,85 +369,55 @@ export const ClassroomMode: React.FC<ClassroomModeProps> = ({ onClose }) => {
 
           {gameStage === 'Lobby' && activeTab === 'StudentJoin' && (
             <div className="space-y-6 text-center py-4 max-w-md mx-auto">
-              {!joinSuccess ? (
-                <form onSubmit={handleStudentJoinRoom} className="space-y-4 text-left">
-                  <div className="text-center space-y-2">
-                    <div className="w-14 h-14 mx-auto rounded-2xl bg-amber-500/20 border border-amber-500/30 flex items-center justify-center text-amber-400">
-                      <Key className="w-7 h-7" />
-                    </div>
-                    <h3 className="text-xl font-black text-white">Join Classroom Live Session</h3>
-                    <p className="text-xs text-slate-300">
-                      Enter the 6-digit Room Code shown on your teacher's projector screen!
-                    </p>
+              <form onSubmit={handleStudentJoinRoom} className="space-y-4 text-left">
+                <div className="text-center space-y-2">
+                  <div className="w-14 h-14 mx-auto rounded-2xl bg-amber-500/20 border border-amber-500/30 flex items-center justify-center text-amber-400">
+                    <Key className="w-7 h-7" />
                   </div>
-
-                  {codeError && (
-                    <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-300 text-xs font-bold text-center">
-                      {codeError}
-                    </div>
-                  )}
-
-                  <div className="space-y-1">
-                    <label className="text-xs font-bold text-slate-400 block">Classroom 6-Digit Code</label>
-                    <input
-                      type="text"
-                      maxLength={6}
-                      required
-                      placeholder="e.g. 849201"
-                      value={inputCode}
-                      onChange={(e) => setInputCode(e.target.value)}
-                      className="w-full px-4 py-3 rounded-xl bg-slate-900 border border-slate-700 text-amber-400 font-mono text-center font-black text-2xl tracking-widest outline-none focus:border-amber-400"
-                    />
-                  </div>
-
-                  <div className="space-y-1">
-                    <label className="text-xs font-bold text-slate-400 block">Your Student Name</label>
-                    <input
-                      type="text"
-                      required
-                      placeholder="e.g. Aarav Sharma"
-                      value={studentNameInput}
-                      onChange={(e) => setStudentNameInput(e.target.value)}
-                      className="w-full px-4 py-3 rounded-xl bg-slate-900 border border-slate-700 text-white text-sm outline-none focus:border-amber-400"
-                    />
-                  </div>
-
-                  <button
-                    type="submit"
-                    className="w-full py-4 rounded-2xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-sm transition shadow-xl shadow-amber-500/20 flex items-center justify-center gap-2"
-                  >
-                    <LogIn className="w-4 h-4 text-slate-950" /> Join Live Classroom Room
-                  </button>
-                </form>
-              ) : (
-                <div className="space-y-6 py-4">
-                  <div className="w-16 h-16 mx-auto rounded-2xl bg-emerald-500/20 border border-emerald-500/40 flex items-center justify-center text-emerald-400">
-                    <CheckCircle2 className="w-8 h-8" />
-                  </div>
-
-                  <div className="space-y-2">
-                    <h3 className="text-2xl font-black text-white">Connected to Room #{inputCode}!</h3>
-                    <p className="text-xs text-slate-300">
-                      Welcome, <strong className="text-amber-400">{studentNameInput || myStudentInfo?.studentName || 'Student'}</strong>! You are connected to the live classroom.
-                    </p>
-                  </div>
-
-                  <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800 text-xs text-slate-400 flex items-center justify-center gap-2">
-                    <Wifi className="w-4 h-4 text-emerald-400 animate-pulse" />
-                    <span>Real-time Network Synced • Ready for Live Questions</span>
-                  </div>
-
-                  <button
-                    onClick={() => {
-                      soundFx.playClick();
-                      setGameStage('Playing');
-                    }}
-                    className="w-full py-4 rounded-2xl bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-slate-950 font-black text-sm transition shadow-xl shadow-emerald-500/20 flex items-center justify-center gap-2"
-                  >
-                    <Play className="w-4 h-4 fill-slate-950" /> Enter Live Question Arena ▶
-                  </button>
+                  <h3 className="text-xl font-black text-white">Join Classroom Live Session</h3>
+                  <p className="text-xs text-slate-300">
+                    Enter the 6-digit Room Code shown on your teacher's projector screen!
+                  </p>
                 </div>
-              )}
+
+                {codeError && (
+                  <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-300 text-xs font-bold text-center">
+                    {codeError}
+                  </div>
+                )}
+
+                <div className="space-y-1">
+                  <label className="text-xs font-bold text-slate-400 block">Classroom 6-Digit Code</label>
+                  <input
+                    type="text"
+                    maxLength={6}
+                    required
+                    placeholder="e.g. 849201"
+                    value={inputCode}
+                    onChange={(e) => setInputCode(e.target.value)}
+                    className="w-full px-4 py-3 rounded-xl bg-slate-900 border border-slate-700 text-amber-400 font-mono text-center font-black text-2xl tracking-widest outline-none focus:border-amber-400"
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-xs font-bold text-slate-400 block">Your Student Name</label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="e.g. Aarav Sharma"
+                    value={studentNameInput}
+                    onChange={(e) => setStudentNameInput(e.target.value)}
+                    className="w-full px-4 py-3 rounded-xl bg-slate-900 border border-slate-700 text-white text-sm outline-none focus:border-amber-400"
+                  />
+                </div>
+
+                <button
+                  type="submit"
+                  className="w-full py-4 rounded-2xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-sm transition shadow-xl shadow-amber-500/20 flex items-center justify-center gap-2"
+                >
+                  <LogIn className="w-4 h-4 text-slate-950" /> Join Live Classroom & Enter Arena
+                </button>
+              </form>
             </div>
           )}
 
@@ -499,7 +465,7 @@ export const ClassroomMode: React.FC<ClassroomModeProps> = ({ onClose }) => {
                       key={idx}
                       disabled={isAnswered}
                       onClick={() => handleSelectOption(idx)}
-                      className={`p-4 rounded-2xl border text-left text-xs sm:text-sm font-semibold transition flex items-center justify-between ${btnStyle}`}
+                      className={`p-4 rounded-2xl border text-left text-xs sm:text-sm font-semibold transition flex items-center justify-between gap-2 ${btnStyle}`}
                     >
                       <span>{opt}</span>
                       {isAnswered && idx === currentQ.correctIndex && <CheckCircle2 className="w-5 h-5 text-emerald-400 shrink-0" />}
@@ -509,44 +475,19 @@ export const ClassroomMode: React.FC<ClassroomModeProps> = ({ onClose }) => {
                 })}
               </div>
 
-              {/* Teacher Projector View: Realtime Connected Students Scoreboard */}
-              {activeTab === 'TeacherHost' && (
-                <div className="p-4 rounded-2xl bg-slate-900/90 border border-slate-800 space-y-2">
-                  <div className="flex items-center justify-between text-xs font-bold text-slate-400">
-                    <span className="flex items-center gap-1.5 text-indigo-400 font-black">
-                      <Trophy className="w-3.5 h-3.5" /> Live Classroom Leaderboard ({connectedStudents.length} Students)
-                    </span>
-                    <span className="text-[10px] text-emerald-400">Auto Syncing</span>
-                  </div>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-32 overflow-y-auto p-1">
-                    {connectedStudents.map((st, i) => (
-                      <div key={st.studentId} className="p-2 rounded-xl bg-slate-800/60 border border-slate-700/50 flex items-center justify-between text-xs">
-                        <div className="flex items-center gap-2 truncate">
-                          <span className="text-amber-400 font-bold">#{i + 1}</span>
-                          <span>{st.avatarEmoji}</span>
-                          <span className="font-bold text-white truncate">{st.studentName}</span>
-                        </div>
-                        <span className="font-black text-amber-400 shrink-0">{st.score} pts</span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
               {/* Feedback Explanation */}
               {isAnswered && (
-                <div className="p-4 rounded-2xl bg-indigo-950/60 border border-indigo-500/30 text-xs text-indigo-200 leading-relaxed space-y-3">
-                  <div className="font-bold flex items-center gap-1.5 text-amber-300">
-                    <Sparkles className="w-4 h-4" /> CIPAM Legal Explanation:
+                <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800 text-xs text-slate-200 space-y-3 animate-fadeIn">
+                  <div className="font-extrabold text-amber-300 flex items-center gap-1.5">
+                    <Sparkles className="w-4 h-4 text-amber-400" /> Explanation & IP Takeaway:
                   </div>
-                  <div>{currentQ.explanation}</div>
+                  <p className="leading-relaxed">{currentQ.explanation}</p>
 
                   <button
                     onClick={handleNextQuestion}
-                    className="w-full py-3 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs transition flex items-center justify-center gap-2 shadow-lg shadow-amber-500/20"
+                    className="w-full py-3.5 rounded-2xl bg-indigo-600 hover:bg-indigo-500 text-white font-black text-xs transition shadow-xl shadow-indigo-600/20"
                   >
-                    <span>{currentQIndex < CLASSROOM_QUESTIONS.length - 1 ? 'Next Question' : 'View Classroom Results'}</span>
-                    <ArrowRight className="w-4 h-4" />
+                    {currentQIndex < CLASSROOM_QUESTIONS.length - 1 ? 'Next Question ▶' : 'View Final Quiz Leaderboard'}
                   </button>
                 </div>
               )}
@@ -555,56 +496,26 @@ export const ClassroomMode: React.FC<ClassroomModeProps> = ({ onClose }) => {
 
           {gameStage === 'Finished' && (
             <div className="space-y-6 text-center py-4">
-              <div className="w-20 h-20 mx-auto rounded-3xl bg-gradient-to-tr from-amber-400 to-amber-600 flex items-center justify-center text-slate-950 font-black shadow-2xl">
+              <div className="w-20 h-20 mx-auto rounded-3xl bg-amber-500/20 border border-amber-500/40 flex items-center justify-center text-amber-400">
                 <Trophy className="w-10 h-10" />
               </div>
 
               <div className="space-y-2">
-                <h3 className="text-3xl font-black text-white">Classroom Quiz Complete! 🏆</h3>
-                <p className="text-xs text-slate-300">Great job mastering Intellectual Property Rights!</p>
+                <h3 className="text-2xl sm:text-3xl font-black text-white">Classroom Live Quiz Completed! 🎉</h3>
+                <p className="text-xs text-slate-300">Great job! Scores have been synced to the teacher's smartboard leaderboard.</p>
               </div>
 
-              {/* Final Real-time Podium for Teacher Host */}
-              {activeTab === 'TeacherHost' && connectedStudents.length > 0 && (
-                <div className="p-5 rounded-3xl bg-slate-900 border border-slate-800 max-w-md mx-auto space-y-3">
-                  <div className="text-xs font-bold text-slate-400 uppercase tracking-widest">Classroom Live Champions</div>
-                  <div className="space-y-2">
-                    {connectedStudents
-                      .sort((a, b) => b.score - a.score)
-                      .slice(0, 3)
-                      .map((st, rank) => (
-                        <div key={st.studentId} className="p-3 rounded-2xl bg-slate-800/80 border border-amber-500/30 flex items-center justify-between">
-                          <div className="flex items-center gap-3">
-                            <span className="text-lg">{rank === 0 ? '🥇' : rank === 1 ? '🥈' : '🥉'}</span>
-                            <span className="text-xl">{st.avatarEmoji}</span>
-                            <span className="font-extrabold text-white">{st.studentName}</span>
-                          </div>
-                          <span className="font-black text-amber-400">{st.score} pts</span>
-                        </div>
-                      ))}
-                  </div>
-                </div>
-              )}
-
-              <div className="p-6 rounded-3xl bg-slate-900 border border-slate-800 max-w-sm mx-auto space-y-2">
-                <div className="text-xs font-bold text-slate-400 uppercase tracking-widest">Your Classroom Score</div>
+              <div className="p-6 rounded-2xl bg-slate-900 border border-slate-800 max-w-xs mx-auto">
+                <div className="text-xs font-bold text-slate-400 uppercase">Your Live Quiz Score</div>
                 <div className="text-4xl font-black text-amber-400">{score} pts</div>
               </div>
 
-              <div className="flex gap-3 max-w-sm mx-auto">
-                <button
-                  onClick={handleRestart}
-                  className="flex-1 py-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold text-xs transition flex items-center justify-center gap-2"
-                >
-                  <RotateCcw className="w-4 h-4" /> Restart Session
-                </button>
-                <button
-                  onClick={onClose}
-                  className="flex-1 py-3 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs transition"
-                >
-                  Return to Quest Map
-                </button>
-              </div>
+              <button
+                onClick={handleRestart}
+                className="w-full max-w-xs mx-auto py-3.5 rounded-2xl bg-indigo-600 hover:bg-indigo-500 text-white font-black text-xs transition shadow-xl shadow-indigo-600/20"
+              >
+                Return to Classroom Lobby
+              </button>
             </div>
           )}
         </div>

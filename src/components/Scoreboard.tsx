@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { X, Trophy, Award, Star, Lightbulb, ShieldCheck, Music, Palette, Search, Building2, Edit3, Database, RefreshCw, CheckCircle2 } from 'lucide-react';
+import { X, Trophy, Award, Star, Lightbulb, ShieldCheck, Music, Palette, Search, Building2, Edit3, Database, RefreshCw, CheckCircle2, FileText, Printer } from 'lucide-react';
 import { BADGES_LIST } from '../data/badgesData';
 import type { BadgeItem } from '../data/badgesData';
 import type { UserGameState, StudentProfile } from '../utils/storage';
@@ -11,6 +11,7 @@ interface ScoreboardProps {
   gameState: UserGameState;
   onClose: () => void;
   onUpdateState: (newState: UserGameState) => void;
+  onOpenGradeSheet?: (levelId: string) => void;
 }
 
 const getBadgeIcon = (iconName: string) => {
@@ -26,6 +27,17 @@ const getBadgeIcon = (iconName: string) => {
   }
 };
 
+const LEVEL_NAMES: Record<string, string> = {
+  patents_basic: 'Level 1: Patents Workshop',
+  trademarks_basic: 'Level 2: Brand Guardian Quest',
+  copyrights_basic: 'Level 3: Creator\'s Studio',
+  designs_basic: 'Level 4: Product Design Lab',
+  detective_case1: 'Level 5: IP Detective Case #101',
+  detective_case2: 'Level 6: IP Detective Case #102',
+  detective_case3: 'Level 7: IP Detective Case #103',
+  startup_simulator: 'Level 8: TechVeda IP Empire Simulator'
+};
+
 const LEADERBOARD_SEED = [
   { rank: 1, name: 'Aarav Sharma', school: 'DPS R.K. Puram, Delhi', score: 2850, stars: 24, badge: 'CIPAM Champion' },
   { rank: 2, name: 'Ananya Patel', school: 'Kendriya Vidyalaya, Mumbai', score: 2600, stars: 22, badge: 'IP Startup Tycoon' },
@@ -33,14 +45,15 @@ const LEADERBOARD_SEED = [
   { rank: 4, name: 'Priya Sundaram', school: 'National Public School, Bengaluru', score: 2300, stars: 19, badge: 'Design Maestro' },
 ];
 
-export const Scoreboard: React.FC<ScoreboardProps> = ({ gameState, onClose, onUpdateState }) => {
-  const [activeTab, setActiveTab] = useState<'Badges' | 'Leaderboard' | 'DatabaseLogs' | 'Profile'>('Badges');
+export const Scoreboard: React.FC<ScoreboardProps> = ({ gameState, onClose, onUpdateState, onOpenGradeSheet }) => {
+  const [activeTab, setActiveTab] = useState<'Badges' | 'GradeSheets' | 'Leaderboard' | 'DatabaseLogs' | 'Profile'>('Badges');
   const [isEditingProfile, setIsEditingProfile] = useState(false);
   const [profileForm, setProfileForm] = useState<StudentProfile>({ ...gameState.profile });
   const [dbLogs, setDbLogs] = useState<GlobalStudentLog[]>([]);
   const [loadingLogs, setLoadingLogs] = useState(false);
 
   const totalStars = Object.values(gameState.levelProgress).reduce((acc, curr) => acc + curr.stars, 0);
+  const isTeacher = gameState.profile.role === 'Teacher';
 
   const fetchDbLogs = async () => {
     setLoadingLogs(true);
@@ -79,8 +92,15 @@ export const Scoreboard: React.FC<ScoreboardProps> = ({ gameState, onClose, onUp
               <Trophy className="w-6 h-6" />
             </div>
             <div>
-              <h2 className="text-xl font-black text-white">Trophy Hall & Scoreboard</h2>
-              <p className="text-xs text-slate-400">Track earned IP badges, classroom logs, and student rankings</p>
+              <div className="flex items-center gap-2">
+                <h2 className="text-xl font-black text-white">
+                  {isTeacher ? 'Teacher Dashboard & Scoreboard' : 'Trophy Hall & Scoreboard'}
+                </h2>
+                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/10 text-amber-300 border border-amber-500/30">
+                  {isTeacher ? '👨‍🏫 Educator Mode' : '👦 Student Mode'}
+                </span>
+              </div>
+              <p className="text-xs text-slate-400">Track earned IP badges, level grade sheets, and student rankings</p>
             </div>
           </div>
 
@@ -94,7 +114,7 @@ export const Scoreboard: React.FC<ScoreboardProps> = ({ gameState, onClose, onUp
 
         {/* Tab Navigation */}
         <div className="flex border-b border-slate-800 bg-slate-900/50 px-6 gap-2 sm:gap-4 overflow-x-auto">
-          {(['Badges', 'Leaderboard', 'DatabaseLogs', 'Profile'] as const).map((tab) => (
+          {(['Badges', 'GradeSheets', 'Leaderboard', 'DatabaseLogs', 'Profile'] as const).map((tab) => (
             <button
               key={tab}
               onClick={() => { soundFx.playClick(); setActiveTab(tab); }}
@@ -104,10 +124,11 @@ export const Scoreboard: React.FC<ScoreboardProps> = ({ gameState, onClose, onUp
                   : 'border-transparent text-slate-400 hover:text-slate-200'
               }`}
             >
-              {tab === 'Badges' && `Badges Wall (${gameState.badges.length}/${BADGES_LIST.length})`}
+              {tab === 'Badges' && `Badges (${gameState.badges.length}/${BADGES_LIST.length})`}
+              {tab === 'GradeSheets' && '📜 Level Grade Sheets'}
               {tab === 'Leaderboard' && 'School Leaderboard'}
               {tab === 'DatabaseLogs' && '☁️ DB Student Logs'}
-              {tab === 'Profile' && 'Student Profile'}
+              {tab === 'Profile' && (isTeacher ? 'Teacher Profile' : 'Student Profile')}
             </button>
           ))}
         </div>
@@ -158,6 +179,77 @@ export const Scoreboard: React.FC<ScoreboardProps> = ({ gameState, onClose, onUp
             </div>
           )}
 
+          {activeTab === 'GradeSheets' && (
+            <div className="space-y-4">
+              <div className="p-4 rounded-2xl bg-indigo-950/40 border border-indigo-500/30 text-xs text-indigo-200 flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <FileText className="w-4 h-4 text-indigo-400" />
+                  <span>Per-Level Performance Grade Sheets (Separate from Certificate)</span>
+                </div>
+                <span className="font-bold text-amber-400">Min Pass: 100 Pts / 1 Star</span>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {Object.keys(LEVEL_NAMES).map((lvlId) => {
+                  const prog = gameState.levelProgress[lvlId];
+                  const sheet = gameState.gradeSheets?.[lvlId];
+                  const isCompleted = prog?.completed;
+                  const score = sheet?.score ?? prog?.score ?? 0;
+                  const stars = sheet?.stars ?? prog?.stars ?? 0;
+
+                  return (
+                    <div
+                      key={lvlId}
+                      className={`p-4 rounded-2xl border flex flex-col justify-between space-y-3 ${
+                        isCompleted
+                          ? 'bg-slate-900 border-slate-700 hover:border-indigo-500/50'
+                          : 'bg-slate-950 border-slate-800/60 opacity-60'
+                      }`}
+                    >
+                      <div className="flex items-start justify-between">
+                        <div>
+                          <h4 className="text-sm font-bold text-white">{LEVEL_NAMES[lvlId]}</h4>
+                          <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${
+                            isCompleted
+                              ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30'
+                              : 'bg-slate-800 text-slate-500 border-slate-700'
+                          }`}>
+                            {isCompleted ? 'Level Passed' : 'Not Passed Yet'}
+                          </span>
+                        </div>
+
+                        {isCompleted && (
+                          <div className="text-right">
+                            <div className="text-sm font-black text-amber-400">{score} pts</div>
+                            <div className="text-xs text-amber-400 flex items-center gap-1">
+                              <Star className="w-3 h-3 fill-amber-400" /> {stars} Stars
+                            </div>
+                          </div>
+                        )}
+                      </div>
+
+                      {isCompleted ? (
+                        <button
+                          onClick={() => {
+                            soundFx.playClick();
+                            if (onOpenGradeSheet) onOpenGradeSheet(lvlId);
+                          }}
+                          className="w-full py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-black text-xs transition flex items-center justify-center gap-1.5 shadow-lg shadow-indigo-600/20"
+                        >
+                          <Printer className="w-3.5 h-3.5" /> View & Print Grade Sheet
+                        </button>
+                      ) : (
+                        <div className="text-[11px] text-slate-500 italic">
+                          Score at least 100 points on this level to generate grade sheet.
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
           {activeTab === 'Leaderboard' && (
             <div className="space-y-4">
               <div className="p-4 rounded-2xl bg-blue-950/40 border border-blue-500/20 text-xs text-blue-200 flex items-center justify-between">
@@ -176,7 +268,7 @@ export const Scoreboard: React.FC<ScoreboardProps> = ({ gameState, onClose, onUp
                       <div className="text-sm font-extrabold text-white flex items-center gap-2">
                         {gameState.profile.name}
                         <span className="text-[10px] bg-amber-500/20 text-amber-300 border border-amber-500/30 px-2 py-0.5 rounded-full">
-                          Your Active Rank
+                          {isTeacher ? '👨‍🏫 Teacher Account' : 'Your Active Rank'}
                         </span>
                       </div>
                       <div className="text-xs text-slate-400">{gameState.profile.schoolName}</div>
@@ -273,10 +365,10 @@ export const Scoreboard: React.FC<ScoreboardProps> = ({ gameState, onClose, onUp
             <div className="max-w-xl mx-auto space-y-6">
               {isEditingProfile ? (
                 <form onSubmit={handleSaveProfile} className="space-y-4 p-6 rounded-2xl bg-slate-900 border border-slate-800">
-                  <h3 className="text-base font-bold text-white">Edit Student Details</h3>
+                  <h3 className="text-base font-bold text-white">Edit {isTeacher ? 'Teacher' : 'Student'} Details</h3>
 
                   <div>
-                    <label className="text-xs font-bold text-slate-400 block mb-1">Student Full Name</label>
+                    <label className="text-xs font-bold text-slate-400 block mb-1">Full Name</label>
                     <input
                       type="text"
                       required
@@ -287,7 +379,7 @@ export const Scoreboard: React.FC<ScoreboardProps> = ({ gameState, onClose, onUp
                   </div>
 
                   <div>
-                    <label className="text-xs font-bold text-slate-400 block mb-1">Class / Grade</label>
+                    <label className="text-xs font-bold text-slate-400 block mb-1">{isTeacher ? 'Designation' : 'Class / Grade'}</label>
                     <input
                       type="text"
                       required
@@ -298,7 +390,7 @@ export const Scoreboard: React.FC<ScoreboardProps> = ({ gameState, onClose, onUp
                   </div>
 
                   <div>
-                    <label className="text-xs font-bold text-slate-400 block mb-1">School Name</label>
+                    <label className="text-xs font-bold text-slate-400 block mb-1">School / Institution Name</label>
                     <input
                       type="text"
                       required
@@ -326,13 +418,17 @@ export const Scoreboard: React.FC<ScoreboardProps> = ({ gameState, onClose, onUp
                 </form>
               ) : (
                 <div className="p-6 rounded-2xl bg-slate-900 border border-slate-800 space-y-6 text-center">
-                  <div className="w-20 h-20 mx-auto rounded-3xl bg-gradient-to-tr from-amber-400 to-orange-500 flex items-center justify-center text-4xl shadow-xl">
+                  <div className="w-20 h-20 mx-auto rounded-3xl bg-gradient-to-tr from-indigo-500 to-purple-600 flex items-center justify-center text-4xl shadow-xl">
                     {gameState.profile.avatar}
                   </div>
 
                   <div>
+                    <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs font-bold uppercase mb-2">
+                      {isTeacher ? '👨‍🏫 Verified Educator Account' : '👦 Registered Student'}
+                    </div>
                     <h3 className="text-2xl font-black text-white">{gameState.profile.name}</h3>
                     <p className="text-sm text-amber-400 font-bold">{gameState.profile.grade} • {gameState.profile.schoolName}</p>
+                    <p className="text-xs text-slate-400 font-mono mt-1">ID: {gameState.profile.studentId || (isTeacher ? 'CIPAM-TCH-84920' : 'CIPAM-STU-84920')}</p>
                   </div>
 
                   <div className="grid grid-cols-3 gap-3">
