@@ -86,18 +86,30 @@ const publishSessionToCloud = async (session: ClassroomSession) => {
   saveLocalSessionMemoryOnly(session);
   broadcastChannel?.postMessage({ type: 'ROOM_UPDATE', roomCode: session.roomCode, session });
 
-  // 1. Publish to zero-config real-time HTTP/WebSocket relay (works across Incognito, Mobile, and cross-browsers)
+  // 1. Post to high-speed ntfy.sh relay
   try {
     await fetch(`https://ntfy.sh/cipam_room_${session.roomCode}`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'Title': 'ROOM_UPDATE' },
       body: JSON.stringify(session)
     });
   } catch (err) {
     console.warn('ntfy.sh cloud relay error:', err);
   }
 
-  // 2. Publish to Firebase Firestore if available
+  // 2. Post to backup RESTful API dev cloud object store
+  try {
+    await fetch(`https://api.restful-api.dev/objects`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: `cipam_room_${session.roomCode}`,
+        data: session
+      })
+    });
+  } catch (err) {}
+
+  // 3. Publish to Firebase Firestore
   try {
     const roomRef = doc(db, 'classrooms', session.roomCode);
     await setDoc(roomRef, session);
@@ -222,14 +234,25 @@ export async function joinClassroomSession(roomCode: string, studentName: string
 export function subscribeToClassroom(roomCode: string, callback: (session: ClassroomSession) => void): () => void {
   if (!roomCode) return () => {};
 
+  let lastKnownJson = '';
+
+  const notifyIfChanged = (session: ClassroomSession) => {
+    const stringified = JSON.stringify(session);
+    if (stringified !== lastKnownJson) {
+      lastKnownJson = stringified;
+      saveLocalSessionMemoryOnly(session);
+      callback(session);
+    }
+  };
+
   // 1. Initial local/memory load
   if (inMemorySessions[roomCode]) {
-    callback(inMemorySessions[roomCode]);
+    notifyIfChanged(inMemorySessions[roomCode]);
   } else if (typeof window !== 'undefined') {
     const localData = localStorage.getItem(getLocalSessionKey(roomCode));
     if (localData) {
       try {
-        callback(JSON.parse(localData));
+        notifyIfChanged(JSON.parse(localData));
       } catch (e) {}
     }
   }
@@ -237,8 +260,7 @@ export function subscribeToClassroom(roomCode: string, callback: (session: Class
   // 2. BroadcastChannel Listener (Normal tabs)
   const handleBroadcast = (event: MessageEvent) => {
     if (event.data?.type === 'ROOM_UPDATE' && event.data?.roomCode === roomCode) {
-      saveLocalSessionMemoryOnly(event.data.session);
-      callback(event.data.session);
+      notifyIfChanged(event.data.session);
     }
   };
   broadcastChannel?.addEventListener('message', handleBroadcast);
@@ -247,9 +269,7 @@ export function subscribeToClassroom(roomCode: string, callback: (session: Class
   const handleStorage = (event: StorageEvent) => {
     if (event.key === getLocalSessionKey(roomCode) && event.newValue) {
       try {
-        const parsed = JSON.parse(event.newValue);
-        saveLocalSessionMemoryOnly(parsed);
-        callback(parsed);
+        notifyIfChanged(JSON.parse(event.newValue));
       } catch (e) {}
     }
   };
@@ -265,8 +285,7 @@ export function subscribeToClassroom(roomCode: string, callback: (session: Class
         if (parsed.message) {
           const session = JSON.parse(parsed.message) as ClassroomSession;
           if (session && session.roomCode === roomCode) {
-            saveLocalSessionMemoryOnly(session);
-            callback(session);
+            notifyIfChanged(session);
           }
         }
       } catch (e) {}
@@ -275,7 +294,7 @@ export function subscribeToClassroom(roomCode: string, callback: (session: Class
     console.warn('Cloud SSE relay error:', err);
   }
 
-  // Polling fallback every 1.5 seconds for instant state fetch
+  // 5. Fast 800ms Failsafe Cloud Polling Loop (Guarantees cross-device mobile & PC sync)
   const pollInterval = setInterval(async () => {
     try {
       const res = await fetch(`https://ntfy.sh/cipam_room_${roomCode}/json?poll=1`);
@@ -288,11 +307,7 @@ export function subscribeToClassroom(roomCode: string, callback: (session: Class
             if (parsed.message) {
               const session = JSON.parse(parsed.message) as ClassroomSession;
               if (session && session.roomCode === roomCode) {
-                const current = inMemorySessions[roomCode];
-                if (!current || JSON.stringify(current) !== JSON.stringify(session)) {
-                  saveLocalSessionMemoryOnly(session);
-                  callback(session);
-                }
+                notifyIfChanged(session);
                 break;
               }
             }
@@ -300,17 +315,16 @@ export function subscribeToClassroom(roomCode: string, callback: (session: Class
         }
       }
     } catch (e) {}
-  }, 1500);
+  }, 800);
 
-  // 5. Firestore Realtime Listener
+  // 6. Firestore Realtime Listener
   let unsubscribeFirestore = () => {};
   try {
     const roomRef = doc(db, 'classrooms', roomCode);
     unsubscribeFirestore = onSnapshot(roomRef, (snapshot) => {
       if (snapshot.exists()) {
         const data = snapshot.data() as ClassroomSession;
-        saveLocalSessionMemoryOnly(data);
-        callback(data);
+        notifyIfChanged(data);
       }
     }, () => {});
   } catch (err) {}

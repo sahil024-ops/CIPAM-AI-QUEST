@@ -95,6 +95,11 @@ export const ClassroomMode: React.FC<ClassroomModeProps> = ({ onClose }) => {
   const [codeError, setCodeError] = useState('');
   const [myStudentInfo, setMyStudentInfo] = useState<ClassroomStudent | null>(null);
 
+  const myStudentInfoRef = useRef<ClassroomStudent | null>(null);
+  useEffect(() => {
+    myStudentInfoRef.current = myStudentInfo;
+  }, [myStudentInfo]);
+
   // Quiz Gameplay State
   const [currentQIndex, setCurrentQIndex] = useState(0);
   const [selectedOption, setSelectedOption] = useState<number | null>(null);
@@ -104,9 +109,6 @@ export const ClassroomMode: React.FC<ClassroomModeProps> = ({ onClose }) => {
 
   const currentQ = CLASSROOM_QUESTIONS[currentQIndex];
   const activeRoomCode = activeTab === 'TeacherHost' ? teacherRoomCode : (inputCode.trim() || session?.roomCode || '');
-
-  // Ref to track latest room code for subscription cleanup
-  const activeSubCodeRef = useRef<string>('');
 
   // Auto Reconnect Saved Student Session on Mount
   useEffect(() => {
@@ -131,9 +133,6 @@ export const ClassroomMode: React.FC<ClassroomModeProps> = ({ onClose }) => {
   // Real-Time Room Subscription Effect
   useEffect(() => {
     if (!activeRoomCode || activeRoomCode.length !== 6) return;
-    if (activeSubCodeRef.current === activeRoomCode) return;
-
-    activeSubCodeRef.current = activeRoomCode;
 
     const unsubscribe = subscribeToClassroom(activeRoomCode, (updatedSession) => {
       setSession(updatedSession);
@@ -144,7 +143,7 @@ export const ClassroomMode: React.FC<ClassroomModeProps> = ({ onClose }) => {
         const sIndex = updatedSession.currentQIndex || 0;
 
         if (stage === 'Lobby') {
-          setStudentStatus((prev) => (prev === 'NOT_JOINED' || prev === 'JOINING' ? 'JOINED_WAITING' : 'JOINED_WAITING'));
+          setStudentStatus((prev) => (prev === 'NOT_JOINED' || prev === 'JOINING' ? 'JOINED_WAITING' : prev === 'QUIZ_ACTIVE' ? 'JOINED_WAITING' : 'JOINED_WAITING'));
         } else if (stage === 'Playing') {
           setStudentStatus('QUIZ_ACTIVE');
           setCurrentQIndex((prevQ) => {
@@ -159,8 +158,9 @@ export const ClassroomMode: React.FC<ClassroomModeProps> = ({ onClose }) => {
         }
 
         // Restore answered state for current question if recorded
-        if (myStudentInfo && updatedSession.students) {
-          const matchingMe = updatedSession.students.find(s => s.studentId === myStudentInfo.studentId);
+        const activeStudent = myStudentInfoRef.current;
+        if (activeStudent && updatedSession.students) {
+          const matchingMe = updatedSession.students.find(s => s.studentId === activeStudent.studentId);
           if (matchingMe) {
             setScore(matchingMe.score);
             const recordedAnswer = matchingMe.answersRecord?.[sIndex];
@@ -174,10 +174,9 @@ export const ClassroomMode: React.FC<ClassroomModeProps> = ({ onClose }) => {
     });
 
     return () => {
-      activeSubCodeRef.current = '';
       unsubscribe();
     };
-  }, [activeRoomCode, activeTab, myStudentInfo]);
+  }, [activeRoomCode, activeTab]);
 
   // Synchronized Countdown Timer (Shared Timestamp Math)
   useEffect(() => {
@@ -227,6 +226,7 @@ export const ClassroomMode: React.FC<ClassroomModeProps> = ({ onClose }) => {
       soundFx.playCorrect();
       setMyStudentInfo(student);
 
+      // Subscribe to real-time updates for cleanCode
       subscribeToClassroom(cleanCode, (updated) => setSession(updated));
       
       // If room is already Playing (Late Joiner), enter QUIZ_ACTIVE immediately; else enter JOINED_WAITING
@@ -484,7 +484,7 @@ export const ClassroomMode: React.FC<ClassroomModeProps> = ({ onClose }) => {
           )}
 
           {/* STUDENT JOINED & WAITING FOR TEACHER (JOINED_WAITING) */}
-          {activeTab === 'StudentJoin' && studentStatus === 'JOINED_WAITING' && (
+          {activeTab === 'StudentJoin' && studentStatus === 'JOINED_WAITING' && session?.gameStage !== 'Playing' && (
             <div className="space-y-6 text-center py-4 max-w-md mx-auto animate-fadeIn">
               <div className="w-16 h-16 mx-auto rounded-3xl bg-emerald-500/20 border border-emerald-500/40 flex items-center justify-center text-emerald-400 animate-pulse">
                 <CheckCircle2 className="w-8 h-8" />
@@ -536,7 +536,7 @@ export const ClassroomMode: React.FC<ClassroomModeProps> = ({ onClose }) => {
           )}
 
           {/* ACTIVE QUIZ ARENA (QUIZ_ACTIVE) */}
-          {(session?.gameStage === 'Playing' || studentStatus === 'QUIZ_ACTIVE') && (
+          {(session?.gameStage === 'Playing' || (activeTab === 'StudentJoin' && studentStatus === 'QUIZ_ACTIVE')) && session?.gameStage !== 'Finished' && (
             <div className="space-y-6 animate-fadeIn">
               {/* Top Progress & Timer Bar */}
               <div className="flex items-center justify-between">
@@ -612,7 +612,7 @@ export const ClassroomMode: React.FC<ClassroomModeProps> = ({ onClose }) => {
           )}
 
           {/* QUIZ FINISHED (QUIZ_FINISHED) */}
-          {(session?.gameStage === 'Finished' || studentStatus === 'QUIZ_FINISHED') && (
+          {(session?.gameStage === 'Finished' || (activeTab === 'StudentJoin' && studentStatus === 'QUIZ_FINISHED')) && (
             <div className="space-y-6 text-center py-4 animate-fadeIn">
               <div className="w-20 h-20 mx-auto rounded-3xl bg-amber-500/20 border border-amber-500/40 flex items-center justify-center text-amber-400">
                 <Trophy className="w-10 h-10" />
