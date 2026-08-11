@@ -357,11 +357,19 @@ export async function updateRoomStage(
     students: []
   };
 
+  // Reset isAnswered and lastAnswerCorrect flags for all students when advancing question or starting quiz
+  const resetStudents = (currentSession.students || []).map((student) => ({
+    ...student,
+    isAnswered: false,
+    lastAnswerCorrect: false
+  }));
+
   const updatedSession: ClassroomSession = {
     ...currentSession,
     gameStage,
     currentQIndex,
-    questionStartedAt: Date.now() // Stamp timestamp for synchronized timer
+    questionStartedAt: Date.now(), // Stamp timestamp for synchronized timer
+    students: resetStudents
   };
 
   await publishSessionToCloud(updatedSession);

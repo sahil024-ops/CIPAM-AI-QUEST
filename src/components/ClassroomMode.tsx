@@ -84,6 +84,7 @@ export const ClassroomMode: React.FC<ClassroomModeProps> = ({ onClose }) => {
 
   // Teacher Host State
   const [teacherRoomCode] = useState(() => Math.floor(100000 + Math.random() * 900000).toString());
+  const [isStartingQuiz, setIsStartingQuiz] = useState(false);
   
   // Active Room Session
   const [session, setSession] = useState<ClassroomSession | null>(null);
@@ -137,22 +138,24 @@ export const ClassroomMode: React.FC<ClassroomModeProps> = ({ onClose }) => {
     const unsubscribe = subscribeToClassroom(activeRoomCode, (updatedSession) => {
       setSession(updatedSession);
 
+      // Synchronize question index across teacher & students
+      const sIndex = updatedSession.currentQIndex || 0;
+      setCurrentQIndex((prevQ) => {
+        if (prevQ !== sIndex) {
+          setSelectedOption(null);
+          setIsAnswered(false);
+        }
+        return sIndex;
+      });
+
       // Student State Machine Transitions based on Server Session State
       if (activeTab === 'StudentJoin') {
         const stage = updatedSession.gameStage;
-        const sIndex = updatedSession.currentQIndex || 0;
 
         if (stage === 'Lobby') {
-          setStudentStatus((prev) => (prev === 'NOT_JOINED' || prev === 'JOINING' ? 'JOINED_WAITING' : prev === 'QUIZ_ACTIVE' ? 'JOINED_WAITING' : 'JOINED_WAITING'));
+          setStudentStatus((prev) => (prev === 'NOT_JOINED' || prev === 'JOINING' ? 'JOINED_WAITING' : 'JOINED_WAITING'));
         } else if (stage === 'Playing') {
           setStudentStatus('QUIZ_ACTIVE');
-          setCurrentQIndex((prevQ) => {
-            if (prevQ !== sIndex) {
-              setSelectedOption(null);
-              setIsAnswered(false);
-            }
-            return sIndex;
-          });
         } else if (stage === 'Finished') {
           setStudentStatus('QUIZ_FINISHED');
         }
@@ -189,7 +192,7 @@ export const ClassroomMode: React.FC<ClassroomModeProps> = ({ onClose }) => {
 
       setTimeLeft(remaining);
 
-      if (remaining === 0 && !isAnswered) {
+      if (remaining === 0 && !isAnswered && activeTab === 'StudentJoin') {
         setIsAnswered(true);
         soundFx.playWrong();
       }
@@ -198,13 +201,24 @@ export const ClassroomMode: React.FC<ClassroomModeProps> = ({ onClose }) => {
     updateTimer();
     const interval = setInterval(updateTimer, 500);
     return () => clearInterval(interval);
-  }, [session?.questionStartedAt, session?.gameStage, session?.currentQIndex, isAnswered]);
+  }, [session?.questionStartedAt, session?.gameStage, session?.currentQIndex, isAnswered, activeTab]);
 
-  // Teacher Starts Quiz Action
+  // Teacher Starts Quiz Action (Mobile Touch Optimized & Failsafe)
   const handleTeacherStartQuiz = async () => {
+    if (isStartingQuiz) return;
+    setIsStartingQuiz(true);
     soundFx.playClick();
-    setCurrentQIndex(0);
-    await updateRoomStage(teacherRoomCode, 'Playing', 0);
+
+    try {
+      setCurrentQIndex(0);
+      setSelectedOption(null);
+      setIsAnswered(false);
+      await updateRoomStage(teacherRoomCode, 'Playing', 0);
+    } catch (err) {
+      console.error('Failed to start live classroom quiz:', err);
+    } finally {
+      setIsStartingQuiz(false);
+    }
   };
 
   // Student Join Form Submit
@@ -226,9 +240,6 @@ export const ClassroomMode: React.FC<ClassroomModeProps> = ({ onClose }) => {
       soundFx.playCorrect();
       setMyStudentInfo(student);
 
-      // Subscribe to real-time updates for cleanCode
-      subscribeToClassroom(cleanCode, (updated) => setSession(updated));
-      
       // If room is already Playing (Late Joiner), enter QUIZ_ACTIVE immediately; else enter JOINED_WAITING
       if (session?.gameStage === 'Playing') {
         setStudentStatus('QUIZ_ACTIVE');
@@ -244,7 +255,7 @@ export const ClassroomMode: React.FC<ClassroomModeProps> = ({ onClose }) => {
 
   // Student Choice Selection Action
   const handleSelectOption = async (idx: number) => {
-    if (isAnswered || !myStudentInfo || !activeRoomCode) return;
+    if (activeTab !== 'StudentJoin' || isAnswered || !myStudentInfo || !activeRoomCode) return;
 
     setSelectedOption(idx);
     setIsAnswered(true);
@@ -307,10 +318,10 @@ export const ClassroomMode: React.FC<ClassroomModeProps> = ({ onClose }) => {
   const connectedStudents = session?.students || [];
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/85 backdrop-blur-md animate-fadeIn">
-      <div className="glass-card w-full max-w-3xl rounded-3xl border border-indigo-500/30 overflow-hidden shadow-2xl flex flex-col max-h-[90vh]">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-950/85 backdrop-blur-md animate-fadeIn">
+      <div className="glass-card w-full max-w-3xl rounded-3xl border border-indigo-500/30 overflow-hidden shadow-2xl flex flex-col max-h-[92vh]">
         {/* Modal Top Header Bar */}
-        <div className="p-5 sm:p-6 border-b border-slate-800 flex items-center justify-between bg-slate-900/90 shrink-0">
+        <div className="p-4 sm:p-6 border-b border-slate-800 flex items-center justify-between bg-slate-900/90 shrink-0">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-2xl bg-indigo-500/20 border border-indigo-500/30 flex items-center justify-center text-indigo-400 font-bold">
               <Users className="w-5 h-5" />
@@ -336,7 +347,7 @@ export const ClassroomMode: React.FC<ClassroomModeProps> = ({ onClose }) => {
 
         {/* Role Tabs (Shown when Student is NOT_JOINED) */}
         {studentStatus === 'NOT_JOINED' && (
-          <div className="flex border-b border-slate-800 bg-slate-900/60 px-6 gap-2 shrink-0">
+          <div className="flex border-b border-slate-800 bg-slate-900/60 px-4 sm:px-6 gap-2 shrink-0">
             <button
               onClick={() => { soundFx.playClick(); setActiveTab('TeacherHost'); }}
               className={`py-3 px-4 font-bold text-xs sm:text-sm border-b-2 transition flex items-center gap-2 ${
@@ -361,11 +372,11 @@ export const ClassroomMode: React.FC<ClassroomModeProps> = ({ onClose }) => {
           </div>
         )}
 
-        {/* Modal Main Content */}
-        <div className="p-6 sm:p-8 flex-1 flex flex-col justify-between overflow-y-auto">
-          {/* TEACHER HOST MODE */}
+        {/* Modal Main Content Area */}
+        <div className="p-4 sm:p-8 flex-1 flex flex-col justify-between overflow-y-auto min-h-0">
+          {/* TEACHER HOST MODE LOBBY */}
           {activeTab === 'TeacherHost' && session?.gameStage === 'Lobby' && (
-            <div className="space-y-6 text-center py-2">
+            <div className="space-y-6 text-center py-2 my-auto">
               <div className="space-y-2 max-w-lg mx-auto">
                 <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-indigo-500/10 border border-indigo-500/30 text-indigo-300 text-xs font-bold uppercase">
                   <Sparkles className="w-3.5 h-3.5" /> Teacher Smartboard Projector Mode
@@ -396,7 +407,7 @@ export const ClassroomMode: React.FC<ClassroomModeProps> = ({ onClose }) => {
                     Waiting for students to enter room code <strong>#{teacherRoomCode}</strong> on their phones...
                   </div>
                 ) : (
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 max-h-36 overflow-y-auto p-1">
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 max-h-32 overflow-y-auto p-1">
                     {connectedStudents.map((st) => (
                       <div key={st.studentId} className="p-2.5 rounded-xl bg-slate-800/80 border border-indigo-500/20 flex items-center gap-2 text-left animate-fadeIn">
                         <span className="text-xl">{st.avatarEmoji}</span>
@@ -410,18 +421,29 @@ export const ClassroomMode: React.FC<ClassroomModeProps> = ({ onClose }) => {
                 )}
               </div>
 
+              {/* Start Quiz Button (Touch Optimized for Mobile 360px-414px) */}
               <button
+                type="button"
+                disabled={isStartingQuiz}
                 onClick={handleTeacherStartQuiz}
-                className="w-full max-w-sm mx-auto py-4 rounded-2xl bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white font-black text-base shadow-xl shadow-indigo-600/30 flex items-center justify-center gap-2 transition"
+                className="w-full max-w-sm mx-auto py-4 rounded-2xl bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 active:scale-95 text-white font-black text-base shadow-xl shadow-indigo-600/30 flex items-center justify-center gap-2 transition touch-manipulation cursor-pointer relative z-10 disabled:opacity-50"
               >
-                <Play className="w-5 h-5 fill-white" /> Start Live Classroom Quiz ({connectedStudents.length} Joined)
+                {isStartingQuiz ? (
+                  <>
+                    <Loader2 className="w-5 h-5 animate-spin" /> Launching Live Arena...
+                  </>
+                ) : (
+                  <>
+                    <Play className="w-5 h-5 fill-white" /> Start Live Classroom Quiz ({connectedStudents.length} Joined)
+                  </>
+                )}
               </button>
             </div>
           )}
 
           {/* STUDENT JOIN FORM (NOT_JOINED) */}
           {activeTab === 'StudentJoin' && studentStatus === 'NOT_JOINED' && (
-            <div className="space-y-6 text-center py-4 max-w-md mx-auto">
+            <div className="space-y-6 text-center py-4 max-w-md mx-auto my-auto">
               <form onSubmit={handleStudentJoinRoom} className="space-y-4 text-left">
                 <div className="text-center space-y-2">
                   <div className="w-14 h-14 mx-auto rounded-2xl bg-amber-500/20 border border-amber-500/30 flex items-center justify-center text-amber-400">
@@ -466,7 +488,7 @@ export const ClassroomMode: React.FC<ClassroomModeProps> = ({ onClose }) => {
 
                 <button
                   type="submit"
-                  className="w-full py-4 rounded-2xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-sm transition shadow-xl shadow-amber-500/20 flex items-center justify-center gap-2"
+                  className="w-full py-4 rounded-2xl bg-amber-500 hover:bg-amber-400 active:scale-95 text-slate-950 font-black text-sm transition shadow-xl shadow-amber-500/20 flex items-center justify-center gap-2 touch-manipulation"
                 >
                   <LogIn className="w-4 h-4 text-slate-950" /> Join Live Classroom & Enter Arena
                 </button>
@@ -476,7 +498,7 @@ export const ClassroomMode: React.FC<ClassroomModeProps> = ({ onClose }) => {
 
           {/* STUDENT JOINING LOADING STATE */}
           {studentStatus === 'JOINING' && (
-            <div className="py-16 text-center space-y-4 max-w-md mx-auto">
+            <div className="py-16 text-center space-y-4 max-w-md mx-auto my-auto">
               <Loader2 className="w-12 h-12 text-amber-400 animate-spin mx-auto" />
               <h3 className="text-xl font-black text-white">Connecting to Classroom #{inputCode}...</h3>
               <p className="text-xs text-slate-400">Verifying session and registering student device...</p>
@@ -485,7 +507,7 @@ export const ClassroomMode: React.FC<ClassroomModeProps> = ({ onClose }) => {
 
           {/* STUDENT JOINED & WAITING FOR TEACHER (JOINED_WAITING) */}
           {activeTab === 'StudentJoin' && studentStatus === 'JOINED_WAITING' && session?.gameStage !== 'Playing' && (
-            <div className="space-y-6 text-center py-4 max-w-md mx-auto animate-fadeIn">
+            <div className="space-y-6 text-center py-4 max-w-md mx-auto my-auto animate-fadeIn">
               <div className="w-16 h-16 mx-auto rounded-3xl bg-emerald-500/20 border border-emerald-500/40 flex items-center justify-center text-emerald-400 animate-pulse">
                 <CheckCircle2 className="w-8 h-8" />
               </div>
@@ -497,7 +519,7 @@ export const ClassroomMode: React.FC<ClassroomModeProps> = ({ onClose }) => {
                 <h3 className="text-2xl font-black text-white">Joined Successfully!</h3>
               </div>
 
-              {/* Exact Requested Waiting Card */}
+              {/* Waiting Card */}
               <div className="p-6 rounded-3xl bg-slate-900 border-2 border-indigo-500/40 space-y-4 text-left shadow-xl">
                 <div className="text-center font-bold text-indigo-300 text-sm border-b border-slate-800 pb-3 uppercase tracking-wider">
                   LIVE CLASSROOM
@@ -537,35 +559,41 @@ export const ClassroomMode: React.FC<ClassroomModeProps> = ({ onClose }) => {
 
           {/* ACTIVE QUIZ ARENA (QUIZ_ACTIVE) */}
           {(session?.gameStage === 'Playing' || (activeTab === 'StudentJoin' && studentStatus === 'QUIZ_ACTIVE')) && session?.gameStage !== 'Finished' && (
-            <div className="space-y-6 animate-fadeIn">
-              {/* Top Progress & Timer Bar */}
-              <div className="flex items-center justify-between">
+            <div className="space-y-5 animate-fadeIn my-auto">
+              {/* Top Progress & Synchronized Visible Timer Bar */}
+              <div className="flex items-center justify-between gap-2">
                 <span className="text-xs font-bold text-slate-400 uppercase tracking-wider bg-slate-900 px-3 py-1 rounded-full border border-slate-800">
                   Question {currentQIndex + 1} of {CLASSROOM_QUESTIONS.length}
                 </span>
 
+                {/* Visible Time Limit Bar for both Teacher & Students */}
                 <div className="flex items-center gap-2 px-3.5 py-1 rounded-full bg-amber-500/10 border border-amber-500/30 text-amber-400 font-extrabold text-sm shadow-md">
                   <Timer className={`w-4 h-4 ${timeLeft <= 5 ? 'animate-bounce text-rose-400' : ''}`} />
-                  <span>{timeLeft}s</span>
+                  <span>Time Left: {timeLeft}s</span>
                 </div>
 
-                <div className="text-xs font-black text-amber-400">Score: {score} pts</div>
+                {activeTab === 'StudentJoin' ? (
+                  <div className="text-xs font-black text-amber-400">Score: {score} pts</div>
+                ) : (
+                  <div className="text-xs font-black text-indigo-300">Teacher View</div>
+                )}
               </div>
 
               {/* Question Card */}
-              <div className="p-6 rounded-2xl bg-slate-900 border border-slate-800 space-y-2">
+              <div className="p-5 sm:p-6 rounded-2xl bg-slate-900 border border-slate-800 space-y-2">
                 <span className="text-[10px] uppercase font-bold text-indigo-400 bg-indigo-500/10 px-2 py-0.5 rounded border border-indigo-500/20">
                   {currentQ.category}
                 </span>
-                <h3 className="text-lg md:text-xl font-extrabold text-white leading-snug">{currentQ.question}</h3>
+                <h3 className="text-base sm:text-xl font-extrabold text-white leading-snug">{currentQ.question}</h3>
               </div>
 
-              {/* Options Grid */}
+              {/* Options Grid (Teacher view starts completely clean/unselected; Student highlights only upon answer) */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 {currentQ.options.map((opt, idx) => {
                   let btnStyle = 'bg-slate-900 border-slate-800 text-slate-200 hover:border-indigo-500/50';
 
-                  if (isAnswered) {
+                  // Student answer highlight logic (Only active for Student tab when student has answered)
+                  if (activeTab === 'StudentJoin' && isAnswered) {
                     if (idx === currentQ.correctIndex) {
                       btnStyle = 'bg-emerald-500/20 border-emerald-500 text-emerald-200 font-extrabold ring-2 ring-emerald-500/30';
                     } else if (selectedOption === idx) {
@@ -578,30 +606,31 @@ export const ClassroomMode: React.FC<ClassroomModeProps> = ({ onClose }) => {
                   return (
                     <button
                       key={idx}
-                      disabled={isAnswered}
+                      disabled={activeTab === 'TeacherHost' || isAnswered}
                       onClick={() => handleSelectOption(idx)}
-                      className={`p-4 rounded-2xl border text-left text-xs sm:text-sm font-semibold transition flex items-center justify-between gap-2 ${btnStyle}`}
+                      className={`p-4 rounded-2xl border text-left text-xs sm:text-sm font-semibold transition flex items-center justify-between gap-2 touch-manipulation ${btnStyle}`}
                     >
                       <span>{opt}</span>
-                      {isAnswered && idx === currentQ.correctIndex && <CheckCircle2 className="w-5 h-5 text-emerald-400 shrink-0" />}
-                      {isAnswered && selectedOption === idx && idx !== currentQ.correctIndex && <XCircle className="w-5 h-5 text-rose-400 shrink-0" />}
+                      {activeTab === 'StudentJoin' && isAnswered && idx === currentQ.correctIndex && <CheckCircle2 className="w-5 h-5 text-emerald-400 shrink-0" />}
+                      {activeTab === 'StudentJoin' && isAnswered && selectedOption === idx && idx !== currentQ.correctIndex && <XCircle className="w-5 h-5 text-rose-400 shrink-0" />}
                     </button>
                   );
                 })}
               </div>
 
-              {/* Feedback Explanation & Teacher Control */}
-              {isAnswered && (
+              {/* Teacher Control & Explanation Banner */}
+              {(isAnswered || activeTab === 'TeacherHost') && (
                 <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800 text-xs text-slate-200 space-y-3 animate-fadeIn">
                   <div className="font-extrabold text-amber-300 flex items-center gap-1.5">
                     <Sparkles className="w-4 h-4 text-amber-400" /> Explanation & IP Takeaway:
                   </div>
-                  <p className="leading-relaxed">{currentQ.explanation}</p>
+                  <p className="leading-relaxed text-slate-300">{currentQ.explanation}</p>
 
                   {activeTab === 'TeacherHost' && (
                     <button
+                      type="button"
                       onClick={handleNextQuestion}
-                      className="w-full py-3.5 rounded-2xl bg-indigo-600 hover:bg-indigo-500 text-white font-black text-xs transition shadow-xl shadow-indigo-600/20"
+                      className="w-full py-3.5 rounded-2xl bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 active:scale-95 text-white font-black text-xs transition shadow-xl shadow-indigo-600/20 touch-manipulation cursor-pointer"
                     >
                       {currentQIndex < CLASSROOM_QUESTIONS.length - 1 ? 'Next Question ▶' : 'View Final Quiz Leaderboard'}
                     </button>
@@ -613,7 +642,7 @@ export const ClassroomMode: React.FC<ClassroomModeProps> = ({ onClose }) => {
 
           {/* QUIZ FINISHED (QUIZ_FINISHED) */}
           {(session?.gameStage === 'Finished' || (activeTab === 'StudentJoin' && studentStatus === 'QUIZ_FINISHED')) && (
-            <div className="space-y-6 text-center py-4 animate-fadeIn">
+            <div className="space-y-6 text-center py-4 my-auto animate-fadeIn">
               <div className="w-20 h-20 mx-auto rounded-3xl bg-amber-500/20 border border-amber-500/40 flex items-center justify-center text-amber-400">
                 <Trophy className="w-10 h-10" />
               </div>
@@ -630,7 +659,7 @@ export const ClassroomMode: React.FC<ClassroomModeProps> = ({ onClose }) => {
 
               <button
                 onClick={handleLeaveRoom}
-                className="w-full max-w-xs mx-auto py-3.5 rounded-2xl bg-indigo-600 hover:bg-indigo-500 text-white font-black text-xs transition shadow-xl shadow-indigo-600/20"
+                className="w-full max-w-xs mx-auto py-3.5 rounded-2xl bg-indigo-600 hover:bg-indigo-500 active:scale-95 text-white font-black text-xs transition shadow-xl shadow-indigo-600/20 touch-manipulation"
               >
                 Exit Classroom Session
               </button>
