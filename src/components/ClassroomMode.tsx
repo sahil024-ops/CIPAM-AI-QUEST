@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { X, Users, Play, Timer, CheckCircle2, XCircle, Trophy, Sparkles, Key, LogIn, Wifi, Loader2 } from 'lucide-react';
+import { X, Users, Play, Timer, CheckCircle2, XCircle, Trophy, Sparkles, Key, LogIn, Wifi, Loader2, AlertCircle, RefreshCw, Layers } from 'lucide-react';
 import { soundFx } from '../utils/audio';
+import { loadGameState, type StudentProfile } from '../utils/storage';
 import { 
   createClassroomSession, 
   joinClassroomSession, 
@@ -11,89 +12,39 @@ import {
   getSavedStudentSession,
   clearStudentSession,
   type ClassroomSession, 
-  type ClassroomStudent 
+  type ClassroomStudent,
+  type ClassroomQuestion 
 } from '../services/classroomService';
 
 interface ClassroomModeProps {
+  userProfile?: StudentProfile;
   onClose: () => void;
 }
 
-interface Question {
-  id: number;
-  question: string;
-  category: 'Patents' | 'Trademarks' | 'Copyrights' | 'Industrial Designs';
-  options: string[];
-  correctIndex: number;
-  explanation: string;
-}
+const QUESTION_DURATION_SEC = 20;
 
-const CLASSROOM_QUESTIONS: Question[] = [
-  {
-    id: 1,
-    question: 'Alex invented a foldable solar backpack that charges laptops in 30 minutes. What IP protects this invention\'s technical mechanism?',
-    category: 'Patents',
-    options: ['Trademark ®', 'Patent ⚙️', 'Copyright ©', 'Geographical Indication 🌾'],
-    correctIndex: 1,
-    explanation: 'A Patent protects new, useful, and non-obvious technical inventions and functional mechanisms for 20 years!'
-  },
-  {
-    id: 2,
-    question: 'Which symbol can be legally used ONLY AFTER a brand name or logo is officially registered with the Trademark Registry in India?',
-    category: 'Trademarks',
-    options: ['™ symbol', '© symbol', '® symbol', '℗ symbol'],
-    correctIndex: 2,
-    explanation: 'The ® symbol signifies an officially Registered Trademark. The ™ symbol can be used while the application is pending.'
-  },
-  {
-    id: 3,
-    question: 'Maya composed an original song and posted it online. Under Indian law, when does Copyright protection begin for her music?',
-    category: 'Copyrights',
-    options: [
-      'Automatically upon creation in tangible form',
-      'Only after paying ₹10,000 to the police',
-      'After 5 years of publishing',
-      'Copyright does not apply to music'
-    ],
-    correctIndex: 0,
-    explanation: 'Copyright protection arises automatically the moment an original work is expressed in a tangible form!'
-  },
-  {
-    id: 4,
-    question: 'A company designed a bottle with a unique curved, wavy glass aesthetic shape. Which IP category protects this visual appearance?',
-    category: 'Industrial Designs',
-    options: ['Patent', 'Industrial Design 🎨', 'Trade Secret', 'Copyright'],
-    correctIndex: 1,
-    explanation: 'Industrial Design registration protects ONLY the visual shape, aesthetic look, pattern, or color combination of an item.'
-  },
-  {
-    id: 5,
-    question: 'Which of the following allows a school student to quote a brief excerpt from a book in a homework project without copyright infringement?',
-    category: 'Copyrights',
-    options: ['Fair Use for Educational Purposes', 'Illegal Piracy', 'Patent Exemption', 'Trademark Licensing'],
-    correctIndex: 0,
-    explanation: 'Fair Use explicitly permits limited usage of copyrighted works for education, research, news reporting, and criticism.'
-  }
-];
+export const ClassroomMode: React.FC<ClassroomModeProps> = ({ userProfile, onClose }) => {
+  // Load saved user profile if not directly provided
+  const activeProfile = userProfile || loadGameState().profile;
+  const initialRole = activeProfile.role === 'Teacher' ? 'TeacherHost' : 'StudentJoin';
 
-export type StudentStatus = 'NOT_JOINED' | 'JOINING' | 'JOINED_WAITING' | 'QUIZ_ACTIVE' | 'QUIZ_FINISHED';
+  const [activeTab, setActiveTab] = useState<'TeacherHost' | 'StudentJoin'>(initialRole);
 
-const QUESTION_DURATION_SEC = 15;
-
-export const ClassroomMode: React.FC<ClassroomModeProps> = ({ onClose }) => {
-  const [activeTab, setActiveTab] = useState<'TeacherHost' | 'StudentJoin'>('TeacherHost');
-
-  // Teacher Host State
-  const [teacherRoomCode] = useState(() => Math.floor(100000 + Math.random() * 900000).toString());
+  // Teacher Creation & Tier Selection State
+  const [selectedTier, setSelectedTier] = useState<1 | 2 | 3>(1);
+  const [isCreatingRoom, setIsCreatingRoom] = useState(false);
   const [isStartingQuiz, setIsStartingQuiz] = useState(false);
-  
+
   // Active Room Session
   const [session, setSession] = useState<ClassroomSession | null>(null);
 
-  // Student State Machine
-  const [studentStatus, setStudentStatus] = useState<StudentStatus>('NOT_JOINED');
+  // Student State Machine & Inputs
   const [inputCode, setInputCode] = useState('');
-  const [studentNameInput, setStudentNameInput] = useState('');
-  const [codeError, setCodeError] = useState('');
+  const [studentNameInput, setStudentNameInput] = useState(activeProfile.name || '');
+  const [studentAvatarInput, setStudentAvatarInput] = useState(activeProfile.avatar || '⚡');
+  
+  const [isConnecting, setIsConnecting] = useState(false);
+  const [joinError, setJoinError] = useState('');
   const [myStudentInfo, setMyStudentInfo] = useState<ClassroomStudent | null>(null);
 
   const myStudentInfoRef = useRef<ClassroomStudent | null>(null);
@@ -108,8 +59,7 @@ export const ClassroomMode: React.FC<ClassroomModeProps> = ({ onClose }) => {
   const [score, setScore] = useState(0);
   const [timeLeft, setTimeLeft] = useState(QUESTION_DURATION_SEC);
 
-  const currentQ = CLASSROOM_QUESTIONS[currentQIndex];
-  const activeRoomCode = activeTab === 'TeacherHost' ? teacherRoomCode : (inputCode.trim() || session?.roomCode || '');
+  const activeRoomCode = session?.roomCode || inputCode.trim();
 
   // Auto Reconnect Saved Student Session on Mount
   useEffect(() => {
@@ -118,49 +68,43 @@ export const ClassroomMode: React.FC<ClassroomModeProps> = ({ onClose }) => {
       setActiveTab('StudentJoin');
       setInputCode(saved.roomCode);
       setStudentNameInput(saved.studentName);
-      setStudentStatus('JOINED_WAITING');
+      setStudentAvatarInput(saved.avatarEmoji || '⚡');
+      
+      // Auto reconnect to saved room
+      setIsConnecting(true);
+      joinClassroomSession(saved.roomCode, saved.studentName, saved.avatarEmoji, saved.studentId)
+        .then(({ session: joinedSession, student }) => {
+          setSession(joinedSession);
+          setMyStudentInfo(student);
+          setIsConnecting(false);
+        })
+        .catch(() => {
+          clearStudentSession();
+          setIsConnecting(false);
+        });
     }
   }, []);
 
-  // Initialize Teacher Host Room Session
-  useEffect(() => {
-    if (activeTab === 'TeacherHost') {
-      createClassroomSession(teacherRoomCode, 'Teacher').then((newSession) => {
-        setSession(newSession);
-      });
-    }
-  }, [activeTab, teacherRoomCode]);
-
-  // Real-Time Room Subscription Effect
+  // Real-Time Room Subscription Effect (Firestore Single Source of Truth)
   useEffect(() => {
     if (!activeRoomCode || activeRoomCode.length !== 6) return;
 
-    const unsubscribe = subscribeToClassroom(activeRoomCode, (updatedSession) => {
-      setSession(updatedSession);
+    const unsubscribe = subscribeToClassroom(
+      activeRoomCode,
+      (updatedSession) => {
+        setSession(updatedSession);
 
-      // Synchronize question index across teacher & students
-      const sIndex = updatedSession.currentQIndex || 0;
-      setCurrentQIndex((prevQ) => {
-        if (prevQ !== sIndex) {
-          setSelectedOption(null);
-          setIsAnswered(false);
-        }
-        return sIndex;
-      });
+        // Synchronize current question index across devices
+        const sIndex = updatedSession.currentQuestionIndex || 0;
+        setCurrentQIndex((prevQ) => {
+          if (prevQ !== sIndex) {
+            setSelectedOption(null);
+            setIsAnswered(false);
+          }
+          return sIndex;
+        });
 
-      // Student State Machine Transitions based on Server Session State
-      if (activeTab === 'StudentJoin') {
-        const stage = updatedSession.gameStage;
-
-        if (stage === 'Lobby') {
-          setStudentStatus((prev) => (prev === 'NOT_JOINED' || prev === 'JOINING' ? 'JOINED_WAITING' : 'JOINED_WAITING'));
-        } else if (stage === 'Playing') {
-          setStudentStatus('QUIZ_ACTIVE');
-        } else if (stage === 'Finished') {
-          setStudentStatus('QUIZ_FINISHED');
-        }
-
-        // Restore answered state for current question if recorded
+        // Restore student score and answered state for current question
         const activeStudent = myStudentInfoRef.current;
         if (activeStudent && updatedSession.students) {
           const matchingMe = updatedSession.students.find(s => s.studentId === activeStudent.studentId);
@@ -173,22 +117,26 @@ export const ClassroomMode: React.FC<ClassroomModeProps> = ({ onClose }) => {
             }
           }
         }
+      },
+      (err) => {
+        console.warn('Realtime subscription notification:', err);
       }
-    });
+    );
 
     return () => {
       unsubscribe();
     };
-  }, [activeRoomCode, activeTab]);
+  }, [activeRoomCode]);
 
-  // Synchronized Countdown Timer (Shared Timestamp Math)
+  // Synchronized Countdown Timer (Timestamp Math)
   useEffect(() => {
-    if (!session || session.gameStage !== 'Playing') return;
+    if (!session || session.status !== 'ACTIVE') return;
 
     const updateTimer = () => {
       const startedAt = session.questionStartedAt || Date.now();
+      const duration = session.durationSec || QUESTION_DURATION_SEC;
       const elapsedSec = Math.floor((Date.now() - startedAt) / 1000);
-      const remaining = Math.max(0, QUESTION_DURATION_SEC - elapsedSec);
+      const remaining = Math.max(0, duration - elapsedSec);
 
       setTimeLeft(remaining);
 
@@ -201,11 +149,31 @@ export const ClassroomMode: React.FC<ClassroomModeProps> = ({ onClose }) => {
     updateTimer();
     const interval = setInterval(updateTimer, 500);
     return () => clearInterval(interval);
-  }, [session?.questionStartedAt, session?.gameStage, session?.currentQIndex, isAnswered, activeTab]);
+  }, [session?.questionStartedAt, session?.status, session?.currentQuestionIndex, isAnswered, activeTab]);
 
-  // Teacher Starts Quiz Action (Mobile Touch Optimized & Failsafe)
+  // Teacher Action: Create New Classroom Session
+  const handleTeacherCreateRoom = async () => {
+    setIsCreatingRoom(true);
+    soundFx.playClick();
+
+    try {
+      const newSession = await createClassroomSession(
+        activeProfile.name || 'Prof. Teacher',
+        activeProfile.studentId || 'CIPAM-TCH-84920',
+        selectedTier
+      );
+      setSession(newSession);
+      soundFx.playVictory();
+    } catch (err) {
+      console.error('Failed to create classroom session:', err);
+    } finally {
+      setIsCreatingRoom(false);
+    }
+  };
+
+  // Teacher Action: Start Classroom Activity
   const handleTeacherStartQuiz = async () => {
-    if (isStartingQuiz) return;
+    if (isStartingQuiz || !session) return;
     setIsStartingQuiz(true);
     soundFx.playClick();
 
@@ -213,52 +181,55 @@ export const ClassroomMode: React.FC<ClassroomModeProps> = ({ onClose }) => {
       setCurrentQIndex(0);
       setSelectedOption(null);
       setIsAnswered(false);
-      await updateRoomStage(teacherRoomCode, 'Playing', 0);
+      await updateRoomStage(session.roomCode, 'ACTIVE', 0);
     } catch (err) {
-      console.error('Failed to start live classroom quiz:', err);
+      console.error('Failed to start classroom activity:', err);
     } finally {
       setIsStartingQuiz(false);
     }
   };
 
-  // Student Join Form Submit
-  const handleStudentJoinRoom = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setCodeError('');
+  // Student Action: Join Live Classroom
+  const handleStudentJoinRoom = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    setJoinError('');
 
     const cleanCode = inputCode.trim();
     if (cleanCode.length !== 6) {
-      setCodeError('Please enter a valid 6-digit Classroom Access Code!');
+      setJoinError('Please enter a valid 6-digit Classroom Access Code!');
       soundFx.playWrong();
       return;
     }
 
-    setStudentStatus('JOINING');
+    setIsConnecting(true);
 
     try {
-      const student = await joinClassroomSession(cleanCode, studentNameInput.trim());
-      soundFx.playCorrect();
-      setMyStudentInfo(student);
+      const { session: joinedSession, student } = await joinClassroomSession(
+        cleanCode,
+        studentNameInput.trim() || activeProfile.name || 'Student',
+        studentAvatarInput || activeProfile.avatar || '⚡'
+      );
 
-      // If room is already Playing (Late Joiner), enter QUIZ_ACTIVE immediately; else enter JOINED_WAITING
-      if (session?.gameStage === 'Playing') {
-        setStudentStatus('QUIZ_ACTIVE');
-        setCurrentQIndex(session.currentQIndex || 0);
-      } else {
-        setStudentStatus('JOINED_WAITING');
-      }
-    } catch (err) {
-      setStudentStatus('NOT_JOINED');
-      setCodeError('Failed to join classroom session. Please verify room code.');
+      soundFx.playCorrect();
+      setSession(joinedSession);
+      setMyStudentInfo(student);
+      setIsConnecting(false);
+    } catch (err: any) {
+      setIsConnecting(false);
+      soundFx.playWrong();
+      setJoinError(err.message || 'Unable to join classroom. Please check the 6-digit code and try again.');
     }
   };
 
-  // Student Choice Selection Action
+  // Student Action: Select & Submit Answer Choice
   const handleSelectOption = async (idx: number) => {
-    if (activeTab !== 'StudentJoin' || isAnswered || !myStudentInfo || !activeRoomCode) return;
+    if (activeTab !== 'StudentJoin' || isAnswered || !myStudentInfo || !session) return;
 
     setSelectedOption(idx);
     setIsAnswered(true);
+
+    const currentQ = session.questions[currentQIndex];
+    if (!currentQ) return;
 
     const isCorrect = idx === currentQ.correctIndex;
     const earnedPoints = isCorrect ? (100 + timeLeft * 5) : 0;
@@ -270,29 +241,33 @@ export const ClassroomMode: React.FC<ClassroomModeProps> = ({ onClose }) => {
       soundFx.playWrong();
     }
 
-    // Submit answer to real-time server session
-    await submitStudentAnswer(activeRoomCode, myStudentInfo.studentId, earnedPoints, isCorrect, currentQIndex, idx);
+    // Submit answer authoritatively to Firestore
+    await submitStudentAnswer(
+      session.roomCode,
+      myStudentInfo.studentId,
+      currentQIndex,
+      idx,
+      earnedPoints,
+      isCorrect
+    );
   };
 
-  // Teacher / Next Question Navigation
+  // Teacher Action: Move to Next Question
   const handleNextQuestion = async () => {
+    if (!session) return;
     soundFx.playClick();
-    if (currentQIndex < CLASSROOM_QUESTIONS.length - 1) {
+
+    if (currentQIndex < session.questions.length - 1) {
       const nextIdx = currentQIndex + 1;
       setCurrentQIndex(nextIdx);
       setSelectedOption(null);
       setIsAnswered(false);
-
-      if (activeTab === 'TeacherHost') {
-        await updateRoomStage(teacherRoomCode, 'Playing', nextIdx);
-      }
+      await updateRoomStage(session.roomCode, 'ACTIVE', nextIdx);
     } else {
       soundFx.playVictory();
-      if (activeTab === 'TeacherHost') {
-        await updateRoomStage(teacherRoomCode, 'Finished', currentQIndex);
-      }
+      await updateRoomStage(session.roomCode, 'FINISHED', currentQIndex);
 
-      // Log progress to global database
+      // Log student progress globally
       if (myStudentInfo) {
         await logStudentGlobalProgress(
           myStudentInfo.studentName,
@@ -305,22 +280,25 @@ export const ClassroomMode: React.FC<ClassroomModeProps> = ({ onClose }) => {
     }
   };
 
-  // Leave / Exit Room Action
+  // Leave / Reset Session
   const handleLeaveRoom = () => {
     soundFx.playClick();
     clearStudentSession();
-    setStudentStatus('NOT_JOINED');
+    setSession(null);
     setMyStudentInfo(null);
     setInputCode('');
-    setStudentNameInput('');
+    setJoinError('');
+    setIsConnecting(false);
   };
 
   const connectedStudents = session?.students || [];
+  const currentQ: ClassroomQuestion | undefined = session?.questions?.[currentQIndex];
+  const isTeacherRole = activeProfile.role === 'Teacher';
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-950/85 backdrop-blur-md animate-fadeIn">
       <div className="glass-card w-full max-w-3xl rounded-3xl border border-indigo-500/30 overflow-hidden shadow-2xl flex flex-col max-h-[92vh]">
-        {/* Modal Top Header Bar */}
+        {/* Top Header Bar */}
         <div className="p-4 sm:p-6 border-b border-slate-800 flex items-center justify-between bg-slate-900/90 shrink-0">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-2xl bg-indigo-500/20 border border-indigo-500/30 flex items-center justify-center text-indigo-400 font-bold">
@@ -328,12 +306,14 @@ export const ClassroomMode: React.FC<ClassroomModeProps> = ({ onClose }) => {
             </div>
             <div>
               <div className="flex items-center gap-2">
-                <h2 className="text-base sm:text-lg font-black text-white">Classroom Live Quiz Arena</h2>
+                <h2 className="text-base sm:text-lg font-black text-white">Classroom Live Arena</h2>
                 <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-[10px] font-bold">
-                  <Wifi className="w-3 h-3 animate-pulse" /> Realtime Synced
+                  <Wifi className="w-3 h-3 animate-pulse" /> Realtime Firestore Synced
                 </span>
               </div>
-              <p className="text-xs text-slate-400">Interactive Classroom Show for Teachers & Students</p>
+              <p className="text-xs text-slate-400">
+                {isTeacherRole ? 'Teacher Educator Host Dashboard' : 'Student Interactive Classroom Arena'}
+              </p>
             </div>
           </div>
 
@@ -345,8 +325,8 @@ export const ClassroomMode: React.FC<ClassroomModeProps> = ({ onClose }) => {
           </button>
         </div>
 
-        {/* Role Tabs (Shown when Student is NOT_JOINED) */}
-        {studentStatus === 'NOT_JOINED' && (
+        {/* Role Tab Navigation (Allows switching role view for testing) */}
+        {!session && (
           <div className="flex border-b border-slate-800 bg-slate-900/60 px-4 sm:px-6 gap-2 shrink-0">
             <button
               onClick={() => { soundFx.playClick(); setActiveTab('TeacherHost'); }}
@@ -356,7 +336,7 @@ export const ClassroomMode: React.FC<ClassroomModeProps> = ({ onClose }) => {
                   : 'border-transparent text-slate-400 hover:text-slate-200'
               }`}
             >
-              <span>👩‍🏫 Host as Teacher (Projector Screen)</span>
+              <span>👩‍🏫 Teacher View (Create Room)</span>
             </button>
 
             <button
@@ -367,53 +347,144 @@ export const ClassroomMode: React.FC<ClassroomModeProps> = ({ onClose }) => {
                   : 'border-transparent text-slate-400 hover:text-slate-200'
               }`}
             >
-              <span>👦 Join as Student (Enter Code)</span>
+              <span>👦 Student View (Join Room)</span>
             </button>
           </div>
         )}
 
-        {/* Modal Main Content Area */}
+        {/* Main Content Scroll Area */}
         <div className="p-4 sm:p-8 flex-1 flex flex-col justify-between overflow-y-auto min-h-0">
-          {/* TEACHER HOST MODE LOBBY */}
-          {activeTab === 'TeacherHost' && session?.gameStage === 'Lobby' && (
+          
+          {/* ======================================================== */}
+          {/* TEACHER HOST MODE — ROOM CREATION FORM & TIER SELECTOR */}
+          {/* ======================================================== */}
+          {activeTab === 'TeacherHost' && !session && (
+            <div className="space-y-6 max-w-lg mx-auto py-2 my-auto text-center">
+              <div className="space-y-2">
+                <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-indigo-500/10 border border-indigo-500/30 text-indigo-300 text-xs font-bold uppercase">
+                  <Sparkles className="w-3.5 h-3.5 text-amber-400" /> Educator Smartboard Mode
+                </div>
+                <h3 className="text-xl sm:text-2xl font-black text-white">Create a Live Classroom Session</h3>
+                <p className="text-xs text-slate-300">
+                  Select an IP learning level for your class, generate a 6-digit access code, and project the screen for students to join!
+                </p>
+              </div>
+
+              {/* Tier Selection */}
+              <div className="space-y-2 text-left">
+                <label className="text-xs font-bold text-slate-400 flex items-center gap-1.5">
+                  <Layers className="w-4 h-4 text-indigo-400" /> Choose Learning Level / Tier:
+                </label>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                  <button
+                    type="button"
+                    onClick={() => setSelectedTier(1)}
+                    className={`p-3.5 rounded-2xl border text-left transition ${
+                      selectedTier === 1
+                        ? 'bg-indigo-600/20 border-indigo-500 text-white ring-2 ring-indigo-500/30'
+                        : 'bg-slate-900 border-slate-800 text-slate-400 hover:border-slate-700'
+                    }`}
+                  >
+                    <div className="text-xs font-black text-amber-400">Tier 1</div>
+                    <div className="text-xs font-bold text-white">Basic IP Explorer</div>
+                    <div className="text-[10px] text-slate-400">Patents, Brands, Copyright basics</div>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setSelectedTier(2)}
+                    className={`p-3.5 rounded-2xl border text-left transition ${
+                      selectedTier === 2
+                        ? 'bg-indigo-600/20 border-indigo-500 text-white ring-2 ring-indigo-500/30'
+                        : 'bg-slate-900 border-slate-800 text-slate-400 hover:border-slate-700'
+                    }`}
+                  >
+                    <div className="text-xs font-black text-amber-400">Tier 2</div>
+                    <div className="text-xs font-bold text-white">IP Detective</div>
+                    <div className="text-[10px] text-slate-400">Scenario cases & infringement</div>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setSelectedTier(3)}
+                    className={`p-3.5 rounded-2xl border text-left transition ${
+                      selectedTier === 3
+                        ? 'bg-indigo-600/20 border-indigo-500 text-white ring-2 ring-indigo-500/30'
+                        : 'bg-slate-900 border-slate-800 text-slate-400 hover:border-slate-700'
+                    }`}
+                  >
+                    <div className="text-xs font-black text-amber-400">Tier 3</div>
+                    <div className="text-xs font-bold text-white">Startup Tycoon</div>
+                    <div className="text-[10px] text-slate-400">Startup IP strategy & licensing</div>
+                  </button>
+                </div>
+              </div>
+
+              {/* Create Classroom Button */}
+              <button
+                type="button"
+                disabled={isCreatingRoom}
+                onClick={handleTeacherCreateRoom}
+                className="w-full py-4 rounded-2xl bg-gradient-to-r from-indigo-600 via-purple-600 to-amber-500 hover:from-indigo-500 hover:to-amber-400 active:scale-95 text-white font-black text-base shadow-xl shadow-indigo-600/30 flex items-center justify-center gap-2 transition touch-manipulation cursor-pointer disabled:opacity-50"
+              >
+                {isCreatingRoom ? (
+                  <>
+                    <Loader2 className="w-5 h-5 animate-spin" /> Generating AI Classroom Session...
+                  </>
+                ) : (
+                  <>
+                    <Play className="w-5 h-5 fill-white" /> Create Live Classroom (Tier {selectedTier})
+                  </>
+                )}
+              </button>
+            </div>
+          )}
+
+          {/* ======================================================== */}
+          {/* TEACHER HOST MODE — WAITING ROOM & CONNECTED STUDENTS */}
+          {/* ======================================================== */}
+          {activeTab === 'TeacherHost' && session && session.status === 'WAITING' && (
             <div className="space-y-6 text-center py-2 my-auto">
               <div className="space-y-2 max-w-lg mx-auto">
                 <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-indigo-500/10 border border-indigo-500/30 text-indigo-300 text-xs font-bold uppercase">
-                  <Sparkles className="w-3.5 h-3.5" /> Teacher Smartboard Projector Mode
+                  {session.tierTitle}
                 </div>
-                <h3 className="text-xl sm:text-2xl font-black text-white">Host a Live IPR Challenge in Class!</h3>
+                <h3 className="text-xl sm:text-2xl font-black text-white">Classroom Live Waiting Room</h3>
                 <p className="text-xs text-slate-300">
-                  Project this screen on your smartboard. Students join from their phone browsers by typing the 6-digit room code!
+                  Project this 6-digit access code on your smartboard for students to join from their devices!
                 </p>
               </div>
 
               {/* Room Code Box */}
               <div className="max-w-xs mx-auto p-5 rounded-3xl bg-slate-900 border-2 border-indigo-500/40 space-y-1 shadow-xl">
-                <div className="text-[11px] font-bold text-slate-400 uppercase tracking-widest">Classroom Access Code</div>
-                <div className="text-4xl font-black text-gradient-purple tracking-wider font-mono">{teacherRoomCode}</div>
+                <div className="text-[11px] font-bold text-slate-400 uppercase tracking-widest">CLASSROOM CODE</div>
+                <div className="text-4xl font-black text-gradient-purple tracking-wider font-mono">{session.roomCode}</div>
               </div>
 
               {/* Real-time Connected Students Grid */}
               <div className="p-4 rounded-2xl bg-slate-900/80 border border-slate-800 space-y-3">
                 <div className="flex items-center justify-between text-xs font-bold text-slate-400">
-                  <span>Connected Student Devices:</span>
+                  <span>Connected Students:</span>
                   <span className="text-amber-400 bg-amber-500/10 px-2.5 py-0.5 rounded-full border border-amber-500/20 font-extrabold">
-                    {connectedStudents.length} Active Students
+                    Students Joined: {connectedStudents.length}
                   </span>
                 </div>
 
                 {connectedStudents.length === 0 ? (
-                  <div className="py-6 text-slate-500 text-xs italic">
-                    Waiting for students to enter room code <strong>#{teacherRoomCode}</strong> on their phones...
+                  <div className="py-6 text-slate-500 text-xs italic flex items-center justify-center gap-2">
+                    <Loader2 className="w-4 h-4 animate-spin text-amber-400" />
+                    Waiting for students to enter code <strong>#{session.roomCode}</strong> on their devices...
                   </div>
                 ) : (
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 max-h-32 overflow-y-auto p-1">
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 max-h-36 overflow-y-auto p-1">
                     {connectedStudents.map((st) => (
                       <div key={st.studentId} className="p-2.5 rounded-xl bg-slate-800/80 border border-indigo-500/20 flex items-center gap-2 text-left animate-fadeIn">
                         <span className="text-xl">{st.avatarEmoji}</span>
                         <div className="truncate">
                           <div className="text-xs font-bold text-white truncate">{st.studentName}</div>
-                          <div className="text-[10px] text-emerald-400 font-mono">Ready to play</div>
+                          <div className="text-[10px] text-emerald-400 font-mono flex items-center gap-1">
+                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span> Ready
+                          </div>
                         </div>
                       </div>
                     ))}
@@ -421,53 +492,75 @@ export const ClassroomMode: React.FC<ClassroomModeProps> = ({ onClose }) => {
                 )}
               </div>
 
-              {/* Start Quiz Button (Touch Optimized for Mobile 360px-414px) */}
-              <button
-                type="button"
-                disabled={isStartingQuiz}
-                onClick={handleTeacherStartQuiz}
-                className="w-full max-w-sm mx-auto py-4 rounded-2xl bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 active:scale-95 text-white font-black text-base shadow-xl shadow-indigo-600/30 flex items-center justify-center gap-2 transition touch-manipulation cursor-pointer relative z-10 disabled:opacity-50"
-              >
-                {isStartingQuiz ? (
-                  <>
-                    <Loader2 className="w-5 h-5 animate-spin" /> Launching Live Arena...
-                  </>
-                ) : (
-                  <>
-                    <Play className="w-5 h-5 fill-white" /> Start Live Classroom Quiz ({connectedStudents.length} Joined)
-                  </>
-                )}
-              </button>
+              {/* Start Quiz Button */}
+              <div className="flex flex-col sm:flex-row items-center justify-center gap-3">
+                <button
+                  type="button"
+                  disabled={isStartingQuiz}
+                  onClick={handleTeacherStartQuiz}
+                  className="w-full max-w-sm py-4 rounded-2xl bg-gradient-to-r from-indigo-600 via-purple-600 to-amber-500 hover:from-indigo-500 hover:to-amber-400 active:scale-95 text-white font-black text-base shadow-xl shadow-indigo-600/30 flex items-center justify-center gap-2 transition touch-manipulation cursor-pointer disabled:opacity-50"
+                >
+                  {isStartingQuiz ? (
+                    <>
+                      <Loader2 className="w-5 h-5 animate-spin" /> Launching Live Activity...
+                    </>
+                  ) : (
+                    <>
+                      <Play className="w-5 h-5 fill-white" /> START CLASSROOM ({connectedStudents.length} Students)
+                    </>
+                  )}
+                </button>
+
+                <button
+                  onClick={handleLeaveRoom}
+                  className="px-4 py-3 rounded-2xl bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white font-bold text-xs transition"
+                >
+                  Cancel / End Session
+                </button>
+              </div>
             </div>
           )}
 
-          {/* STUDENT JOIN FORM (NOT_JOINED) */}
-          {activeTab === 'StudentJoin' && studentStatus === 'NOT_JOINED' && (
+          {/* ======================================================== */}
+          {/* STUDENT JOIN MODE — JOIN FORM (No Teacher Controls) */}
+          {/* ======================================================== */}
+          {activeTab === 'StudentJoin' && !session && (
             <div className="space-y-6 text-center py-4 max-w-md mx-auto my-auto">
               <form onSubmit={handleStudentJoinRoom} className="space-y-4 text-left">
                 <div className="text-center space-y-2">
                   <div className="w-14 h-14 mx-auto rounded-2xl bg-amber-500/20 border border-amber-500/30 flex items-center justify-center text-amber-400">
                     <Key className="w-7 h-7" />
                   </div>
-                  <h3 className="text-xl font-black text-white">Join Classroom Live Session</h3>
+                  <h3 className="text-xl font-black text-white">Join Live Classroom</h3>
                   <p className="text-xs text-slate-300">
-                    Enter the 6-digit Room Code shown on your teacher's projector screen!
+                    Enter the 6-digit Classroom Code shown on your teacher's projector screen!
                   </p>
                 </div>
 
-                {codeError && (
-                  <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-300 text-xs font-bold text-center">
-                    {codeError}
+                {/* ERROR BANNER WITH TRY AGAIN BUTTON — ZERO INFINITE SPINNERS */}
+                {joinError && (
+                  <div className="p-4 rounded-2xl bg-rose-500/15 border border-rose-500/40 text-rose-200 space-y-2 text-center animate-fadeIn">
+                    <div className="flex items-center justify-center gap-2 text-rose-400 font-bold text-xs">
+                      <AlertCircle className="w-4 h-4" /> Unable to Join Classroom
+                    </div>
+                    <p className="text-xs text-slate-300">{joinError}</p>
+                    <button
+                      type="button"
+                      onClick={() => { setJoinError(''); setInputCode(''); }}
+                      className="px-4 py-1.5 rounded-xl bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 font-bold text-xs border border-rose-500/40 transition inline-flex items-center gap-1.5"
+                    >
+                      <RefreshCw className="w-3.5 h-3.5" /> Try Again
+                    </button>
                   </div>
                 )}
 
                 <div className="space-y-1">
-                  <label className="text-xs font-bold text-slate-400 block">Classroom 6-Digit Code</label>
+                  <label className="text-xs font-bold text-slate-400 block">6-Digit Classroom Code</label>
                   <input
                     type="text"
                     maxLength={6}
                     required
-                    placeholder="e.g. 558308"
+                    placeholder="e.g. 803624"
                     value={inputCode}
                     onChange={(e) => setInputCode(e.target.value)}
                     className="w-full px-4 py-3 rounded-xl bg-slate-900 border border-slate-700 text-amber-400 font-mono text-center font-black text-2xl tracking-widest outline-none focus:border-amber-400"
@@ -475,11 +568,11 @@ export const ClassroomMode: React.FC<ClassroomModeProps> = ({ onClose }) => {
                 </div>
 
                 <div className="space-y-1">
-                  <label className="text-xs font-bold text-slate-400 block">Your Student Name</label>
+                  <label className="text-xs font-bold text-slate-400 block">Your Name</label>
                   <input
                     type="text"
                     required
-                    placeholder="e.g. qwerty"
+                    placeholder="e.g. Rahul Sharma"
                     value={studentNameInput}
                     onChange={(e) => setStudentNameInput(e.target.value)}
                     className="w-full px-4 py-3 rounded-xl bg-slate-900 border border-slate-700 text-white text-sm outline-none focus:border-amber-400"
@@ -488,51 +581,58 @@ export const ClassroomMode: React.FC<ClassroomModeProps> = ({ onClose }) => {
 
                 <button
                   type="submit"
-                  className="w-full py-4 rounded-2xl bg-amber-500 hover:bg-amber-400 active:scale-95 text-slate-950 font-black text-sm transition shadow-xl shadow-amber-500/20 flex items-center justify-center gap-2 touch-manipulation"
+                  disabled={isConnecting}
+                  className="w-full py-4 rounded-2xl bg-amber-500 hover:bg-amber-400 active:scale-95 text-slate-950 font-black text-sm transition shadow-xl shadow-amber-500/20 flex items-center justify-center gap-2 touch-manipulation cursor-pointer disabled:opacity-50"
                 >
-                  <LogIn className="w-4 h-4 text-slate-950" /> Join Live Classroom & Enter Arena
+                  {isConnecting ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin text-slate-950" /> Connecting to Classroom...
+                    </>
+                  ) : (
+                    <>
+                      <LogIn className="w-4 h-4 text-slate-950" /> Join Classroom
+                    </>
+                  )}
                 </button>
               </form>
             </div>
           )}
 
-          {/* STUDENT JOINING LOADING STATE */}
-          {studentStatus === 'JOINING' && (
-            <div className="py-16 text-center space-y-4 max-w-md mx-auto my-auto">
-              <Loader2 className="w-12 h-12 text-amber-400 animate-spin mx-auto" />
-              <h3 className="text-xl font-black text-white">Connecting to Classroom #{inputCode}...</h3>
-              <p className="text-xs text-slate-400">Verifying session and registering student device...</p>
-            </div>
-          )}
-
-          {/* STUDENT JOINED & WAITING FOR TEACHER (JOINED_WAITING) */}
-          {activeTab === 'StudentJoin' && studentStatus === 'JOINED_WAITING' && session?.gameStage !== 'Playing' && (
+          {/* ======================================================== */}
+          {/* STUDENT JOINED — WAITING FOR TEACHER TO START */}
+          {/* ======================================================== */}
+          {activeTab === 'StudentJoin' && session && session.status === 'WAITING' && (
             <div className="space-y-6 text-center py-4 max-w-md mx-auto my-auto animate-fadeIn">
               <div className="w-16 h-16 mx-auto rounded-3xl bg-emerald-500/20 border border-emerald-500/40 flex items-center justify-center text-emerald-400 animate-pulse">
                 <CheckCircle2 className="w-8 h-8" />
               </div>
 
-              <div className="space-y-2">
-                <div className="inline-block px-3 py-1 rounded-full bg-emerald-500/10 text-emerald-300 border border-emerald-500/30 text-xs font-black uppercase tracking-wider">
-                  ✓ Connected to Classroom
-                </div>
-                <h3 className="text-2xl font-black text-white">Joined Successfully!</h3>
+              <div className="space-y-1">
+                <h3 className="text-2xl font-black text-white">You're in!</h3>
+                <p className="text-xs text-slate-300">Successfully connected to your live classroom session.</p>
               </div>
 
-              {/* Waiting Card */}
+              {/* Classroom & Student Info Card */}
               <div className="p-6 rounded-3xl bg-slate-900 border-2 border-indigo-500/40 space-y-4 text-left shadow-xl">
-                <div className="text-center font-bold text-indigo-300 text-sm border-b border-slate-800 pb-3 uppercase tracking-wider">
-                  LIVE CLASSROOM
+                <div className="text-center font-bold text-indigo-300 text-xs border-b border-slate-800 pb-2.5 uppercase tracking-wider">
+                  {session.tierTitle}
                 </div>
 
                 <div className="space-y-2 text-xs">
                   <div className="flex items-center justify-between text-slate-300">
                     <span className="font-semibold text-slate-400">Student:</span>
-                    <strong className="text-white font-bold">{myStudentInfo?.studentName || studentNameInput}</strong>
+                    <strong className="text-white font-bold flex items-center gap-1.5">
+                      <span>{myStudentInfo?.avatarEmoji || studentAvatarInput}</span>
+                      <span>{myStudentInfo?.studentName || studentNameInput}</span>
+                    </strong>
                   </div>
                   <div className="flex items-center justify-between text-slate-300">
-                    <span className="font-semibold text-slate-400">Room Code:</span>
-                    <strong className="text-amber-400 font-mono text-base">{inputCode || session?.roomCode}</strong>
+                    <span className="font-semibold text-slate-400">Classroom Code:</span>
+                    <strong className="text-amber-400 font-mono text-base">#{session.roomCode}</strong>
+                  </div>
+                  <div className="flex items-center justify-between text-slate-300">
+                    <span className="font-semibold text-slate-400">Teacher:</span>
+                    <strong className="text-white font-bold">{session.teacherName}</strong>
                   </div>
                   <div className="flex items-center justify-between text-slate-300 pt-2 border-t border-slate-800">
                     <span className="font-semibold text-slate-400">Connection Status:</span>
@@ -543,8 +643,8 @@ export const ClassroomMode: React.FC<ClassroomModeProps> = ({ onClose }) => {
                 </div>
 
                 <div className="p-4 rounded-2xl bg-indigo-950/60 border border-indigo-500/30 text-center space-y-1 animate-pulse">
-                  <div className="text-xs font-black text-indigo-200">Waiting for teacher to start the quiz...</div>
-                  <p className="text-[11px] text-slate-400">Please wait for the teacher to start. The quiz will begin automatically!</p>
+                  <div className="text-xs font-black text-indigo-200">Waiting for your teacher to start...</div>
+                  <p className="text-[11px] text-slate-400">The live activity will appear automatically. No page refresh needed!</p>
                 </div>
               </div>
 
@@ -552,21 +652,23 @@ export const ClassroomMode: React.FC<ClassroomModeProps> = ({ onClose }) => {
                 onClick={handleLeaveRoom}
                 className="text-xs text-rose-400 hover:text-rose-300 font-bold underline transition"
               >
-                Leave Room / Exit Session
+                Leave Classroom / Exit
               </button>
             </div>
           )}
 
-          {/* ACTIVE QUIZ ARENA (QUIZ_ACTIVE) */}
-          {(session?.gameStage === 'Playing' || (activeTab === 'StudentJoin' && studentStatus === 'QUIZ_ACTIVE')) && session?.gameStage !== 'Finished' && (
+          {/* ======================================================== */}
+          {/* ACTIVE QUIZ ARENA (TEACHER & STUDENT SYNCHRONIZED) */}
+          {/* ======================================================== */}
+          {session && session.status === 'ACTIVE' && currentQ && (
             <div className="space-y-5 animate-fadeIn my-auto">
-              {/* Top Progress & Synchronized Visible Timer Bar */}
+              {/* Top Progress & Synchronized Timer Bar */}
               <div className="flex items-center justify-between gap-2">
                 <span className="text-xs font-bold text-slate-400 uppercase tracking-wider bg-slate-900 px-3 py-1 rounded-full border border-slate-800">
-                  Question {currentQIndex + 1} of {CLASSROOM_QUESTIONS.length}
+                  Question {currentQIndex + 1} of {session.questions.length}
                 </span>
 
-                {/* Visible Time Limit Bar for both Teacher & Students */}
+                {/* Visible Authoritative Time Limit Bar */}
                 <div className="flex items-center gap-2 px-3.5 py-1 rounded-full bg-amber-500/10 border border-amber-500/30 text-amber-400 font-extrabold text-sm shadow-md">
                   <Timer className={`w-4 h-4 ${timeLeft <= 5 ? 'animate-bounce text-rose-400' : ''}`} />
                   <span>Time Left: {timeLeft}s</span>
@@ -587,7 +689,7 @@ export const ClassroomMode: React.FC<ClassroomModeProps> = ({ onClose }) => {
                 <h3 className="text-base sm:text-xl font-extrabold text-white leading-snug">{currentQ.question}</h3>
               </div>
 
-              {/* Options Grid (Teacher view starts completely clean/unselected; Student highlights only upon answer) */}
+              {/* Options Grid (Teacher view starts clean/unselected; Student highlights only upon answer) */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 {currentQ.options.map((opt, idx) => {
                   let btnStyle = 'bg-slate-900 border-slate-800 text-slate-200 hover:border-indigo-500/50';
@@ -618,7 +720,7 @@ export const ClassroomMode: React.FC<ClassroomModeProps> = ({ onClose }) => {
                 })}
               </div>
 
-              {/* Teacher Control & Explanation Banner */}
+              {/* Explanation & Teacher Next Question Control */}
               {(isAnswered || activeTab === 'TeacherHost') && (
                 <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800 text-xs text-slate-200 space-y-3 animate-fadeIn">
                   <div className="font-extrabold text-amber-300 flex items-center gap-1.5">
@@ -632,7 +734,7 @@ export const ClassroomMode: React.FC<ClassroomModeProps> = ({ onClose }) => {
                       onClick={handleNextQuestion}
                       className="w-full py-3.5 rounded-2xl bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 active:scale-95 text-white font-black text-xs transition shadow-xl shadow-indigo-600/20 touch-manipulation cursor-pointer"
                     >
-                      {currentQIndex < CLASSROOM_QUESTIONS.length - 1 ? 'Next Question ▶' : 'View Final Quiz Leaderboard'}
+                      {currentQIndex < session.questions.length - 1 ? 'Next Question ▶' : 'Finish Classroom Activity'}
                     </button>
                   )}
                 </div>
@@ -640,22 +742,49 @@ export const ClassroomMode: React.FC<ClassroomModeProps> = ({ onClose }) => {
             </div>
           )}
 
-          {/* QUIZ FINISHED (QUIZ_FINISHED) */}
-          {(session?.gameStage === 'Finished' || (activeTab === 'StudentJoin' && studentStatus === 'QUIZ_FINISHED')) && (
+          {/* ======================================================== */}
+          {/* QUIZ FINISHED RESULTS */}
+          {/* ======================================================== */}
+          {session && session.status === 'FINISHED' && (
             <div className="space-y-6 text-center py-4 my-auto animate-fadeIn">
               <div className="w-20 h-20 mx-auto rounded-3xl bg-amber-500/20 border border-amber-500/40 flex items-center justify-center text-amber-400">
                 <Trophy className="w-10 h-10" />
               </div>
 
               <div className="space-y-2">
-                <h3 className="text-2xl sm:text-3xl font-black text-white">Classroom Live Quiz Completed! 🎉</h3>
-                <p className="text-xs text-slate-300">Great job! All scores have been logged to the smartboard leaderboard.</p>
+                <h3 className="text-2xl sm:text-3xl font-black text-white">Classroom Live Activity Completed! 🎉</h3>
+                <p className="text-xs text-slate-300">Great job! All student scores have been logged to the classroom leaderboard.</p>
               </div>
 
-              <div className="p-6 rounded-2xl bg-slate-900 border border-slate-800 max-w-xs mx-auto">
-                <div className="text-xs font-bold text-slate-400 uppercase">Your Final Quiz Score</div>
-                <div className="text-4xl font-black text-amber-400">{score} pts</div>
-              </div>
+              {activeTab === 'StudentJoin' && (
+                <div className="p-6 rounded-2xl bg-slate-900 border border-slate-800 max-w-xs mx-auto">
+                  <div className="text-xs font-bold text-slate-400 uppercase">Your Final Quiz Score</div>
+                  <div className="text-4xl font-black text-amber-400">{score} pts</div>
+                </div>
+              )}
+
+              {/* Connected Students Final Leaderboard for Teacher */}
+              {activeTab === 'TeacherHost' && (
+                <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800 space-y-3 max-w-md mx-auto text-left">
+                  <div className="text-xs font-bold text-slate-400 border-b border-slate-800 pb-2">
+                    Final Classroom Leaderboard ({connectedStudents.length} Students)
+                  </div>
+                  <div className="space-y-2 max-h-48 overflow-y-auto">
+                    {connectedStudents
+                      .sort((a, b) => b.score - a.score)
+                      .map((st, i) => (
+                        <div key={st.studentId} className="flex items-center justify-between p-2.5 rounded-xl bg-slate-800/80 text-xs">
+                          <div className="flex items-center gap-2">
+                            <span className="font-black text-amber-400">#{i + 1}</span>
+                            <span>{st.avatarEmoji}</span>
+                            <span className="font-bold text-white">{st.studentName}</span>
+                          </div>
+                          <span className="font-black text-amber-400">{st.score} pts</span>
+                        </div>
+                      ))}
+                  </div>
+                </div>
+              )}
 
               <button
                 onClick={handleLeaveRoom}
@@ -665,6 +794,7 @@ export const ClassroomMode: React.FC<ClassroomModeProps> = ({ onClose }) => {
               </button>
             </div>
           )}
+
         </div>
       </div>
     </div>

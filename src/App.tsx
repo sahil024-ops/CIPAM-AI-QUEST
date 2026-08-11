@@ -263,7 +263,7 @@ export function App() {
       )}
 
       {showClassroom && (
-        <ClassroomMode onClose={() => setShowClassroom(false)} />
+        <ClassroomMode userProfile={gameState.profile} onClose={() => setShowClassroom(false)} />
       )}
 
       {showCertificate && (
