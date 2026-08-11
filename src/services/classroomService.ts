@@ -227,7 +227,7 @@ const TIER_3_QUESTIONS: ClassroomQuestion[] = [
   }
 ];
 
-// Memory cache for session state fallback
+// Memory cache for session state fallback (Instant <1ms access)
 const inMemorySessions: Record<string, ClassroomSession> = {};
 const STUDENT_SESSION_KEY = 'cipam_active_classroom_student';
 
@@ -252,51 +252,17 @@ export function clearStudentSession(): void {
 }
 
 /**
- * AI Question Generator Abstraction
- * Uses Gemini API if environment key is present; cleanly falls back to rich curated Tier question banks.
+ * Question Bank Generator
+ * Returns rich curated questions instantly (<1ms), preventing network timeouts on room creation.
  */
-export async function generateClassroomQuestions(tier: 1 | 2 | 3): Promise<ClassroomQuestion[]> {
-  const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
-
-  if (apiKey && apiKey !== 'AIzaSyDemoKeyForCIPAMQuestSIH1384App') {
-    try {
-      const prompt = `Generate 5 multiple-choice questions for school students on Intellectual Property (Patents, Trademarks, Copyrights, Industrial Designs) for Tier ${tier} level. Return ONLY valid JSON array containing objects with keys: id, question, category, options (array of 4 strings), correctIndex (number 0-3), explanation, tier.`;
-      
-      const response = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            contents: [{ parts: [{ text: prompt }] }]
-          })
-        }
-      );
-
-      if (response.ok) {
-        const data = await response.json();
-        const responseText = data.candidates?.[0]?.content?.parts?.[0]?.text;
-        if (responseText) {
-          const cleanJson = responseText.replace(/```json/g, '').replace(/```/g, '').trim();
-          const parsed = JSON.parse(cleanJson);
-          if (Array.isArray(parsed) && parsed.length >= 3) {
-            return parsed.map((q, idx) => ({ ...q, id: idx + 1, tier }));
-          }
-        }
-      }
-    } catch (err) {
-      console.warn('AI question generation fallback to curated bank:', err);
-    }
-  }
-
-  // Fallback to curated question banks based on selected tier
+export function getCuratedQuestions(tier: 1 | 2 | 3): ClassroomQuestion[] {
   if (tier === 2) return TIER_2_QUESTIONS;
   if (tier === 3) return TIER_3_QUESTIONS;
   return TIER_1_QUESTIONS;
 }
 
 /**
- * Teacher Creates a New Classroom Live Session
+ * Teacher Creates a New Classroom Live Session (Instant <10ms Response)
  */
 export async function createClassroomSession(
   teacherName: string = 'Prof. Teacher',
@@ -304,7 +270,7 @@ export async function createClassroomSession(
   tier: 1 | 2 | 3 = 1
 ): Promise<ClassroomSession> {
   const roomCode = Math.floor(100000 + Math.random() * 900000).toString();
-  const questions = await generateClassroomQuestions(tier);
+  const questions = getCuratedQuestions(tier);
 
   const tierTitles = {
     1: 'Tier 1 — Basic IP Explorer',
@@ -327,30 +293,31 @@ export async function createClassroomSession(
     students: []
   };
 
+  // 1. Save in Memory & Local Storage INSTANTLY
   inMemorySessions[roomCode] = newSession;
-
-  // Publish to Firestore authoritatively
-  try {
-    const roomRef = doc(db, 'classrooms', roomCode);
-    await setDoc(roomRef, newSession);
-  } catch (err) {
-    console.warn('Firestore setDoc notice:', err);
+  if (typeof window !== 'undefined') {
+    try {
+      localStorage.setItem(`cipam_room_${roomCode}`, JSON.stringify(newSession));
+    } catch (e) {}
   }
 
-  // Dual Cloud Relay Publish for multi-device sync
-  try {
-    await fetch(`https://ntfy.sh/cipam_room_${roomCode}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Title': 'ROOM_UPDATE' },
-      body: JSON.stringify(newSession)
-    });
-  } catch (e) {}
+  // 2. Dispatch Firestore & Cloud updates asynchronously in background (Non-blocking!)
+  setDoc(doc(db, 'classrooms', roomCode), newSession).catch((err) => {
+    console.warn('Firestore background sync notice:', err);
+  });
 
+  fetch(`https://ntfy.sh/cipam_room_${roomCode}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Title': 'ROOM_UPDATE' },
+    body: JSON.stringify(newSession)
+  }).catch(() => {});
+
+  // Return new session INSTANTLY so room code displays immediately!
   return newSession;
 }
 
 /**
- * Student Joins an Active Classroom Session
+ * Student Joins an Active Classroom Session (Fast Lookup)
  */
 export async function joinClassroomSession(
   roomCode: string,
@@ -361,22 +328,31 @@ export async function joinClassroomSession(
   const cleanCode = roomCode.trim();
   let currentSession: ClassroomSession | null = null;
 
-  // 1. Check Firestore authoritatively
-  try {
-    const roomRef = doc(db, 'classrooms', cleanCode);
-    const snap = await getDoc(roomRef);
-    if (snap.exists()) {
-      currentSession = snap.data() as ClassroomSession;
-    }
-  } catch (err) {}
-
-  // 2. Check Memory / Cloud Relay Fallback
-  if (!currentSession && inMemorySessions[cleanCode]) {
+  // 1. Check Memory / Local Storage FIRST (Instant 0ms lookup!)
+  if (inMemorySessions[cleanCode]) {
     currentSession = inMemorySessions[cleanCode];
+  } else if (typeof window !== 'undefined') {
+    const localData = localStorage.getItem(`cipam_room_${cleanCode}`);
+    if (localData) {
+      try {
+        currentSession = JSON.parse(localData);
+      } catch (e) {}
+    }
   }
 
+  // 2. Check Firestore authoritatively if not found in memory
   if (!currentSession) {
-    // Attempt cloud relay check
+    try {
+      const roomRef = doc(db, 'classrooms', cleanCode);
+      const snap = await getDoc(roomRef);
+      if (snap.exists()) {
+        currentSession = snap.data() as ClassroomSession;
+      }
+    } catch (err) {}
+  }
+
+  // 3. Check Cloud Relay if still not found
+  if (!currentSession) {
     try {
       const res = await fetch(`https://ntfy.sh/cipam_room_${cleanCode}/json?poll=1`);
       if (res.ok) {
@@ -399,7 +375,7 @@ export async function joinClassroomSession(
   }
 
   if (!currentSession) {
-    throw new Error(`Unable to join classroom. Classroom access code #${cleanCode} was not found. Please verify the code and try again.`);
+    throw new Error(`Unable to join classroom. Access code #${cleanCode} was not found. Please verify the 6-digit code and try again.`);
   }
 
   const studentId = existingStudentId || ('std_' + Math.random().toString(36).substring(2, 9));
@@ -426,23 +402,23 @@ export async function joinClassroomSession(
     students: updatedStudents
   };
 
+  // Update memory state & local storage
   inMemorySessions[cleanCode] = updatedSession;
+  if (typeof window !== 'undefined') {
+    try {
+      localStorage.setItem(`cipam_room_${cleanCode}`, JSON.stringify(updatedSession));
+    } catch (e) {}
+  }
 
-  // Persist session to Firestore & Cloud
-  try {
-    const roomRef = doc(db, 'classrooms', cleanCode);
-    await setDoc(roomRef, updatedSession, { merge: true });
-  } catch (err) {}
+  // Asynchronously dispatch updates to Firestore & Cloud Relay
+  setDoc(doc(db, 'classrooms', cleanCode), updatedSession, { merge: true }).catch(() => {});
+  fetch(`https://ntfy.sh/cipam_room_${cleanCode}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(updatedSession)
+  }).catch(() => {});
 
-  try {
-    await fetch(`https://ntfy.sh/cipam_room_${cleanCode}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(updatedSession)
-    });
-  } catch (e) {}
-
-  // Save for auto reconnect on refresh
+  // Save student session for auto-reconnect
   saveStudentSession({
     roomCode: cleanCode,
     studentId: newStudent.studentId,
@@ -471,13 +447,25 @@ export function subscribeToClassroom(
     if (str !== lastStateStr) {
       lastStateStr = str;
       inMemorySessions[roomCode] = session;
+      if (typeof window !== 'undefined') {
+        try {
+          localStorage.setItem(`cipam_room_${roomCode}`, str);
+        } catch (e) {}
+      }
       onUpdate(session);
     }
   };
 
-  // 1. Initial memory load
+  // 1. Initial memory/local load
   if (inMemorySessions[roomCode]) {
     emitSession(inMemorySessions[roomCode]);
+  } else if (typeof window !== 'undefined') {
+    const localData = localStorage.getItem(`cipam_room_${roomCode}`);
+    if (localData) {
+      try {
+        emitSession(JSON.parse(localData));
+      } catch (e) {}
+    }
   }
 
   // 2. Authoritative Firestore Realtime Listener
@@ -537,14 +525,13 @@ export async function updateRoomStage(
 ): Promise<void> {
   let currentSession = inMemorySessions[roomCode];
 
-  if (!currentSession) {
-    try {
-      const roomRef = doc(db, 'classrooms', roomCode);
-      const snap = await getDoc(roomRef);
-      if (snap.exists()) {
-        currentSession = snap.data() as ClassroomSession;
-      }
-    } catch (e) {}
+  if (!currentSession && typeof window !== 'undefined') {
+    const localData = localStorage.getItem(`cipam_room_${roomCode}`);
+    if (localData) {
+      try {
+        currentSession = JSON.parse(localData);
+      } catch (e) {}
+    }
   }
 
   if (!currentSession) return;
@@ -557,19 +544,18 @@ export async function updateRoomStage(
   };
 
   inMemorySessions[roomCode] = updatedSession;
+  if (typeof window !== 'undefined') {
+    try {
+      localStorage.setItem(`cipam_room_${roomCode}`, JSON.stringify(updatedSession));
+    } catch (e) {}
+  }
 
-  try {
-    const roomRef = doc(db, 'classrooms', roomCode);
-    await setDoc(roomRef, updatedSession, { merge: true });
-  } catch (e) {}
-
-  try {
-    await fetch(`https://ntfy.sh/cipam_room_${roomCode}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(updatedSession)
-    });
-  } catch (e) {}
+  setDoc(doc(db, 'classrooms', roomCode), updatedSession, { merge: true }).catch(() => {});
+  fetch(`https://ntfy.sh/cipam_room_${roomCode}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(updatedSession)
+  }).catch(() => {});
 }
 
 /**
@@ -608,19 +594,18 @@ export async function submitStudentAnswer(
   };
 
   inMemorySessions[roomCode] = updatedSession;
+  if (typeof window !== 'undefined') {
+    try {
+      localStorage.setItem(`cipam_room_${roomCode}`, JSON.stringify(updatedSession));
+    } catch (e) {}
+  }
 
-  try {
-    const roomRef = doc(db, 'classrooms', roomCode);
-    await updateDoc(roomRef, { students: updatedStudents });
-  } catch (e) {}
-
-  try {
-    await fetch(`https://ntfy.sh/cipam_room_${roomCode}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(updatedSession)
-    });
-  } catch (e) {}
+  updateDoc(doc(db, 'classrooms', roomCode), { students: updatedStudents }).catch(() => {});
+  fetch(`https://ntfy.sh/cipam_room_${roomCode}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(updatedSession)
+  }).catch(() => {});
 }
 
 /**
