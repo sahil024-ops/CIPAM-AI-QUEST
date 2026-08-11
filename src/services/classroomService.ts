@@ -7,6 +7,7 @@ export interface ClassroomStudent {
   currentQIndex: number;
   isAnswered: boolean;
   lastAnswerCorrect: boolean;
+  answersRecord?: Record<number, { selectedIndex: number; points: number; isCorrect: boolean }>;
   joinedAt: string;
   avatarEmoji: string;
 }
@@ -16,8 +17,16 @@ export interface ClassroomSession {
   teacherName: string;
   gameStage: 'Lobby' | 'Playing' | 'Finished';
   currentQIndex: number;
+  questionStartedAt?: number;
   createdAt: string;
   students: ClassroomStudent[];
+}
+
+export interface SavedStudentSession {
+  roomCode: string;
+  studentId: string;
+  studentName: string;
+  joinedAt: string;
 }
 
 export interface GlobalStudentLog {
@@ -40,9 +49,29 @@ const broadcastChannel = typeof window !== 'undefined' && 'BroadcastChannel' in 
   ? new BroadcastChannel('cipam_classroom_channel') 
   : null;
 
-// Helper to handle local storage fallback state
 const getLocalSessionKey = (roomCode: string) => `cipam_room_${roomCode}`;
 const getGlobalLogsKey = () => `cipam_global_student_logs`;
+const STUDENT_SESSION_KEY = 'cipam_active_student_session';
+
+export function saveStudentSession(session: SavedStudentSession): void {
+  try {
+    localStorage.setItem(STUDENT_SESSION_KEY, JSON.stringify(session));
+  } catch (e) {}
+}
+
+export function getSavedStudentSession(): SavedStudentSession | null {
+  try {
+    const saved = localStorage.getItem(STUDENT_SESSION_KEY);
+    if (saved) return JSON.parse(saved);
+  } catch (e) {}
+  return null;
+}
+
+export function clearStudentSession(): void {
+  try {
+    localStorage.removeItem(STUDENT_SESSION_KEY);
+  } catch (e) {}
+}
 
 const saveLocalSessionMemoryOnly = (session: ClassroomSession) => {
   inMemorySessions[session.roomCode] = session;
@@ -77,7 +106,7 @@ const publishSessionToCloud = async (session: ClassroomSession) => {
   }
 };
 
-const getLocalSession = async (roomCode: string): Promise<ClassroomSession | null> => {
+export const getLocalSession = async (roomCode: string): Promise<ClassroomSession | null> => {
   if (inMemorySessions[roomCode]) {
     return inMemorySessions[roomCode];
   }
@@ -126,6 +155,7 @@ export async function createClassroomSession(roomCode: string, teacherName: stri
     teacherName,
     gameStage: 'Lobby',
     currentQIndex: 0,
+    questionStartedAt: Date.now(),
     createdAt: new Date().toISOString(),
     students: []
   };
@@ -148,6 +178,7 @@ export async function joinClassroomSession(roomCode: string, studentName: string
     currentQIndex: 0,
     isAnswered: false,
     lastAnswerCorrect: false,
+    answersRecord: {},
     joinedAt: new Date().toISOString(),
     avatarEmoji: randomEmoji
   };
@@ -158,6 +189,7 @@ export async function joinClassroomSession(roomCode: string, studentName: string
     teacherName: 'Teacher',
     gameStage: 'Lobby',
     currentQIndex: 0,
+    questionStartedAt: Date.now(),
     createdAt: new Date().toISOString(),
     students: []
   };
@@ -172,6 +204,15 @@ export async function joinClassroomSession(roomCode: string, studentName: string
   };
 
   await publishSessionToCloud(updatedSession);
+
+  // Persist session locally for reconnection
+  saveStudentSession({
+    roomCode,
+    studentId: newStudent.studentId,
+    studentName: newStudent.studentName,
+    joinedAt: newStudent.joinedAt
+  });
+
   return newStudent;
 }
 
@@ -179,6 +220,8 @@ export async function joinClassroomSession(roomCode: string, studentName: string
  * Subscribes to real-time updates for a classroom room session across Incognito, Mobile & tabs
  */
 export function subscribeToClassroom(roomCode: string, callback: (session: ClassroomSession) => void): () => void {
+  if (!roomCode) return () => {};
+
   // 1. Initial local/memory load
   if (inMemorySessions[roomCode]) {
     callback(inMemorySessions[roomCode]);
@@ -295,6 +338,7 @@ export async function updateRoomStage(
     teacherName: 'Teacher',
     gameStage,
     currentQIndex,
+    questionStartedAt: Date.now(),
     createdAt: new Date().toISOString(),
     students: []
   };
@@ -302,7 +346,8 @@ export async function updateRoomStage(
   const updatedSession: ClassroomSession = {
     ...currentSession,
     gameStage,
-    currentQIndex
+    currentQIndex,
+    questionStartedAt: Date.now() // Stamp timestamp for synchronized timer
   };
 
   await publishSessionToCloud(updatedSession);
@@ -316,19 +361,25 @@ export async function submitStudentAnswer(
   studentId: string,
   earnedPoints: number,
   isCorrect: boolean,
-  currentQIndex: number
+  currentQIndex: number,
+  selectedIndex: number
 ): Promise<void> {
   const currentSession = await getLocalSession(roomCode);
   if (!currentSession) return;
 
   const updatedStudents = currentSession.students.map((student) => {
     if (student.studentId === studentId) {
+      const existingRecord = student.answersRecord || {};
       return {
         ...student,
         score: student.score + earnedPoints,
         currentQIndex,
         isAnswered: true,
-        lastAnswerCorrect: isCorrect
+        lastAnswerCorrect: isCorrect,
+        answersRecord: {
+          ...existingRecord,
+          [currentQIndex]: { selectedIndex, points: earnedPoints, isCorrect }
+        }
       };
     }
     return student;

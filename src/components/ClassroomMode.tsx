@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { X, Users, Play, Timer, CheckCircle2, XCircle, Trophy, Sparkles, Key, LogIn, Wifi } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+import { X, Users, Play, Timer, CheckCircle2, XCircle, Trophy, Sparkles, Key, LogIn, Wifi, Loader2 } from 'lucide-react';
 import { soundFx } from '../utils/audio';
 import { 
   createClassroomSession, 
@@ -8,6 +8,8 @@ import {
   updateRoomStage, 
   submitStudentAnswer, 
   logStudentGlobalProgress,
+  getSavedStudentSession,
+  clearStudentSession,
   type ClassroomSession, 
   type ClassroomStudent 
 } from '../services/classroomService';
@@ -73,15 +75,21 @@ const CLASSROOM_QUESTIONS: Question[] = [
   }
 ];
 
+export type StudentStatus = 'NOT_JOINED' | 'JOINING' | 'JOINED_WAITING' | 'QUIZ_ACTIVE' | 'QUIZ_FINISHED';
+
+const QUESTION_DURATION_SEC = 15;
+
 export const ClassroomMode: React.FC<ClassroomModeProps> = ({ onClose }) => {
   const [activeTab, setActiveTab] = useState<'TeacherHost' | 'StudentJoin'>('TeacherHost');
-  const [gameStage, setGameStage] = useState<'Lobby' | 'Playing' | 'Finished'>('Lobby');
 
   // Teacher Host State
-  const [roomCode] = useState(() => Math.floor(100000 + Math.random() * 900000).toString());
+  const [teacherRoomCode] = useState(() => Math.floor(100000 + Math.random() * 900000).toString());
+  
+  // Active Room Session
   const [session, setSession] = useState<ClassroomSession | null>(null);
 
-  // Student Join State
+  // Student State Machine
+  const [studentStatus, setStudentStatus] = useState<StudentStatus>('NOT_JOINED');
   const [inputCode, setInputCode] = useState('');
   const [studentNameInput, setStudentNameInput] = useState('');
   const [codeError, setCodeError] = useState('');
@@ -92,101 +100,152 @@ export const ClassroomMode: React.FC<ClassroomModeProps> = ({ onClose }) => {
   const [selectedOption, setSelectedOption] = useState<number | null>(null);
   const [isAnswered, setIsAnswered] = useState(false);
   const [score, setScore] = useState(0);
-  const [timeLeft, setTimeLeft] = useState(15);
+  const [timeLeft, setTimeLeft] = useState(QUESTION_DURATION_SEC);
 
   const currentQ = CLASSROOM_QUESTIONS[currentQIndex];
+  const activeRoomCode = activeTab === 'TeacherHost' ? teacherRoomCode : (inputCode.trim() || session?.roomCode || '');
+
+  // Ref to track latest room code for subscription cleanup
+  const activeSubCodeRef = useRef<string>('');
+
+  // Auto Reconnect Saved Student Session on Mount
+  useEffect(() => {
+    const saved = getSavedStudentSession();
+    if (saved && saved.roomCode) {
+      setActiveTab('StudentJoin');
+      setInputCode(saved.roomCode);
+      setStudentNameInput(saved.studentName);
+      setStudentStatus('JOINED_WAITING');
+    }
+  }, []);
 
   // Initialize Teacher Host Room Session
   useEffect(() => {
     if (activeTab === 'TeacherHost') {
-      createClassroomSession(roomCode, 'Teacher').then((newSession) => {
+      createClassroomSession(teacherRoomCode, 'Teacher').then((newSession) => {
         setSession(newSession);
       });
     }
-  }, [activeTab, roomCode]);
+  }, [activeTab, teacherRoomCode]);
 
-  // Subscribe to real-time database updates for current room code
-  const targetRoomCode = activeTab === 'TeacherHost' ? roomCode : inputCode;
+  // Real-Time Room Subscription Effect
   useEffect(() => {
-    if (!targetRoomCode || targetRoomCode.length !== 6) return;
+    if (!activeRoomCode || activeRoomCode.length !== 6) return;
+    if (activeSubCodeRef.current === activeRoomCode) return;
 
-    const unsubscribe = subscribeToClassroom(targetRoomCode, (updatedSession) => {
+    activeSubCodeRef.current = activeRoomCode;
+
+    const unsubscribe = subscribeToClassroom(activeRoomCode, (updatedSession) => {
       setSession(updatedSession);
 
-      // Student sync stage & question index from Teacher
+      // Student State Machine Transitions based on Server Session State
       if (activeTab === 'StudentJoin') {
-        if (updatedSession.gameStage && updatedSession.gameStage !== gameStage) {
-          setGameStage(updatedSession.gameStage);
+        const stage = updatedSession.gameStage;
+        const sIndex = updatedSession.currentQIndex || 0;
+
+        if (stage === 'Lobby') {
+          setStudentStatus((prev) => (prev === 'NOT_JOINED' || prev === 'JOINING' ? 'JOINED_WAITING' : 'JOINED_WAITING'));
+        } else if (stage === 'Playing') {
+          setStudentStatus('QUIZ_ACTIVE');
+          setCurrentQIndex((prevQ) => {
+            if (prevQ !== sIndex) {
+              setSelectedOption(null);
+              setIsAnswered(false);
+            }
+            return sIndex;
+          });
+        } else if (stage === 'Finished') {
+          setStudentStatus('QUIZ_FINISHED');
         }
-        if (typeof updatedSession.currentQIndex === 'number' && updatedSession.currentQIndex !== currentQIndex) {
-          setCurrentQIndex(updatedSession.currentQIndex);
-          setSelectedOption(null);
-          setIsAnswered(false);
-          setTimeLeft(15);
+
+        // Restore answered state for current question if recorded
+        if (myStudentInfo && updatedSession.students) {
+          const matchingMe = updatedSession.students.find(s => s.studentId === myStudentInfo.studentId);
+          if (matchingMe) {
+            setScore(matchingMe.score);
+            const recordedAnswer = matchingMe.answersRecord?.[sIndex];
+            if (recordedAnswer) {
+              setSelectedOption(recordedAnswer.selectedIndex);
+              setIsAnswered(true);
+            }
+          }
         }
       }
     });
 
-    return () => unsubscribe();
-  }, [targetRoomCode, activeTab, gameStage, currentQIndex]);
+    return () => {
+      activeSubCodeRef.current = '';
+      unsubscribe();
+    };
+  }, [activeRoomCode, activeTab, myStudentInfo]);
 
-  // Timer effect during play
+  // Synchronized Countdown Timer (Shared Timestamp Math)
   useEffect(() => {
-    if (gameStage !== 'Playing' || isAnswered) return;
+    if (!session || session.gameStage !== 'Playing') return;
 
-    const timer = setInterval(() => {
-      setTimeLeft((prev) => {
-        if (prev <= 1) {
-          clearInterval(timer);
-          handleTimeOut();
-          return 0;
-        }
-        return prev - 1;
-      });
-    }, 1000);
+    const updateTimer = () => {
+      const startedAt = session.questionStartedAt || Date.now();
+      const elapsedSec = Math.floor((Date.now() - startedAt) / 1000);
+      const remaining = Math.max(0, QUESTION_DURATION_SEC - elapsedSec);
 
-    return () => clearInterval(timer);
-  }, [gameStage, isAnswered, currentQIndex]);
+      setTimeLeft(remaining);
 
-  const handleTimeOut = () => {
-    setIsAnswered(true);
-    soundFx.playWrong();
-  };
+      if (remaining === 0 && !isAnswered) {
+        setIsAnswered(true);
+        soundFx.playWrong();
+      }
+    };
 
+    updateTimer();
+    const interval = setInterval(updateTimer, 500);
+    return () => clearInterval(interval);
+  }, [session?.questionStartedAt, session?.gameStage, session?.currentQIndex, isAnswered]);
+
+  // Teacher Starts Quiz Action
   const handleTeacherStartQuiz = async () => {
     soundFx.playClick();
-    setGameStage('Playing');
     setCurrentQIndex(0);
-    await updateRoomStage(roomCode, 'Playing', 0);
+    await updateRoomStage(teacherRoomCode, 'Playing', 0);
   };
 
+  // Student Join Form Submit
   const handleStudentJoinRoom = async (e: React.FormEvent) => {
     e.preventDefault();
     setCodeError('');
 
     const cleanCode = inputCode.trim();
     if (cleanCode.length !== 6) {
-      setCodeError('Please enter a valid 6-digit Classroom Room Code!');
+      setCodeError('Please enter a valid 6-digit Classroom Access Code!');
       soundFx.playWrong();
       return;
     }
+
+    setStudentStatus('JOINING');
 
     try {
       const student = await joinClassroomSession(cleanCode, studentNameInput.trim());
       soundFx.playCorrect();
       setMyStudentInfo(student);
-      // Auto-enter Playing stage immediately upon join so student sees questions right away
-      setGameStage('Playing');
-      if (session?.currentQIndex) {
-        setCurrentQIndex(session.currentQIndex);
+
+      subscribeToClassroom(cleanCode, (updated) => setSession(updated));
+      
+      // If room is already Playing (Late Joiner), enter QUIZ_ACTIVE immediately; else enter JOINED_WAITING
+      if (session?.gameStage === 'Playing') {
+        setStudentStatus('QUIZ_ACTIVE');
+        setCurrentQIndex(session.currentQIndex || 0);
+      } else {
+        setStudentStatus('JOINED_WAITING');
       }
     } catch (err) {
-      setCodeError('Failed to join classroom session. Check your network or room code.');
+      setStudentStatus('NOT_JOINED');
+      setCodeError('Failed to join classroom session. Please verify room code.');
     }
   };
 
+  // Student Choice Selection Action
   const handleSelectOption = async (idx: number) => {
-    if (isAnswered) return;
+    if (isAnswered || !myStudentInfo || !activeRoomCode) return;
+
     setSelectedOption(idx);
     setIsAnswered(true);
 
@@ -200,12 +259,11 @@ export const ClassroomMode: React.FC<ClassroomModeProps> = ({ onClose }) => {
       soundFx.playWrong();
     }
 
-    // Submit answer to real-time database if joined as student
-    if (myStudentInfo && inputCode) {
-      await submitStudentAnswer(inputCode, myStudentInfo.studentId, earnedPoints, isCorrect, currentQIndex);
-    }
+    // Submit answer to real-time server session
+    await submitStudentAnswer(activeRoomCode, myStudentInfo.studentId, earnedPoints, isCorrect, currentQIndex, idx);
   };
 
+  // Teacher / Next Question Navigation
   const handleNextQuestion = async () => {
     soundFx.playClick();
     if (currentQIndex < CLASSROOM_QUESTIONS.length - 1) {
@@ -213,17 +271,14 @@ export const ClassroomMode: React.FC<ClassroomModeProps> = ({ onClose }) => {
       setCurrentQIndex(nextIdx);
       setSelectedOption(null);
       setIsAnswered(false);
-      setTimeLeft(15);
 
       if (activeTab === 'TeacherHost') {
-        await updateRoomStage(roomCode, 'Playing', nextIdx);
+        await updateRoomStage(teacherRoomCode, 'Playing', nextIdx);
       }
     } else {
-      setGameStage('Finished');
       soundFx.playVictory();
-
       if (activeTab === 'TeacherHost') {
-        await updateRoomStage(roomCode, 'Finished', currentQIndex);
+        await updateRoomStage(teacherRoomCode, 'Finished', currentQIndex);
       }
 
       // Log progress to global database
@@ -239,18 +294,14 @@ export const ClassroomMode: React.FC<ClassroomModeProps> = ({ onClose }) => {
     }
   };
 
-  const handleRestart = async () => {
+  // Leave / Exit Room Action
+  const handleLeaveRoom = () => {
     soundFx.playClick();
-    setGameStage('Lobby');
-    setCurrentQIndex(0);
-    setSelectedOption(null);
-    setIsAnswered(false);
-    setScore(0);
-    setTimeLeft(15);
-
-    if (activeTab === 'TeacherHost') {
-      await updateRoomStage(roomCode, 'Lobby', 0);
-    }
+    clearStudentSession();
+    setStudentStatus('NOT_JOINED');
+    setMyStudentInfo(null);
+    setInputCode('');
+    setStudentNameInput('');
   };
 
   const connectedStudents = session?.students || [];
@@ -258,7 +309,7 @@ export const ClassroomMode: React.FC<ClassroomModeProps> = ({ onClose }) => {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/85 backdrop-blur-md animate-fadeIn">
       <div className="glass-card w-full max-w-3xl rounded-3xl border border-indigo-500/30 overflow-hidden shadow-2xl flex flex-col max-h-[90vh]">
-        {/* Modal Header */}
+        {/* Modal Top Header Bar */}
         <div className="p-5 sm:p-6 border-b border-slate-800 flex items-center justify-between bg-slate-900/90 shrink-0">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-2xl bg-indigo-500/20 border border-indigo-500/30 flex items-center justify-center text-indigo-400 font-bold">
@@ -268,10 +319,10 @@ export const ClassroomMode: React.FC<ClassroomModeProps> = ({ onClose }) => {
               <div className="flex items-center gap-2">
                 <h2 className="text-base sm:text-lg font-black text-white">Classroom Live Quiz Arena</h2>
                 <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-[10px] font-bold">
-                  <Wifi className="w-3 h-3 animate-pulse" /> Live DB Synced
+                  <Wifi className="w-3 h-3 animate-pulse" /> Realtime Synced
                 </span>
               </div>
-              <p className="text-xs text-slate-400">Interactive Real-Time Classroom Show for Teachers & Students</p>
+              <p className="text-xs text-slate-400">Interactive Classroom Show for Teachers & Students</p>
             </div>
           </div>
 
@@ -283,8 +334,8 @@ export const ClassroomMode: React.FC<ClassroomModeProps> = ({ onClose }) => {
           </button>
         </div>
 
-        {/* Role Selector Tabs (Only in Lobby Stage) */}
-        {gameStage === 'Lobby' && (
+        {/* Role Tabs (Shown when Student is NOT_JOINED) */}
+        {studentStatus === 'NOT_JOINED' && (
           <div className="flex border-b border-slate-800 bg-slate-900/60 px-6 gap-2 shrink-0">
             <button
               onClick={() => { soundFx.playClick(); setActiveTab('TeacherHost'); }}
@@ -310,9 +361,10 @@ export const ClassroomMode: React.FC<ClassroomModeProps> = ({ onClose }) => {
           </div>
         )}
 
-        {/* Modal Content */}
+        {/* Modal Main Content */}
         <div className="p-6 sm:p-8 flex-1 flex flex-col justify-between overflow-y-auto">
-          {gameStage === 'Lobby' && activeTab === 'TeacherHost' && (
+          {/* TEACHER HOST MODE */}
+          {activeTab === 'TeacherHost' && session?.gameStage === 'Lobby' && (
             <div className="space-y-6 text-center py-2">
               <div className="space-y-2 max-w-lg mx-auto">
                 <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-indigo-500/10 border border-indigo-500/30 text-indigo-300 text-xs font-bold uppercase">
@@ -327,7 +379,7 @@ export const ClassroomMode: React.FC<ClassroomModeProps> = ({ onClose }) => {
               {/* Room Code Box */}
               <div className="max-w-xs mx-auto p-5 rounded-3xl bg-slate-900 border-2 border-indigo-500/40 space-y-1 shadow-xl">
                 <div className="text-[11px] font-bold text-slate-400 uppercase tracking-widest">Classroom Access Code</div>
-                <div className="text-4xl font-black text-gradient-purple tracking-wider font-mono">{roomCode}</div>
+                <div className="text-4xl font-black text-gradient-purple tracking-wider font-mono">{teacherRoomCode}</div>
               </div>
 
               {/* Real-time Connected Students Grid */}
@@ -341,7 +393,7 @@ export const ClassroomMode: React.FC<ClassroomModeProps> = ({ onClose }) => {
 
                 {connectedStudents.length === 0 ? (
                   <div className="py-6 text-slate-500 text-xs italic">
-                    Waiting for students to enter room code <strong>#{roomCode}</strong> on their phones...
+                    Waiting for students to enter room code <strong>#{teacherRoomCode}</strong> on their phones...
                   </div>
                 ) : (
                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 max-h-36 overflow-y-auto p-1">
@@ -367,7 +419,8 @@ export const ClassroomMode: React.FC<ClassroomModeProps> = ({ onClose }) => {
             </div>
           )}
 
-          {gameStage === 'Lobby' && activeTab === 'StudentJoin' && (
+          {/* STUDENT JOIN FORM (NOT_JOINED) */}
+          {activeTab === 'StudentJoin' && studentStatus === 'NOT_JOINED' && (
             <div className="space-y-6 text-center py-4 max-w-md mx-auto">
               <form onSubmit={handleStudentJoinRoom} className="space-y-4 text-left">
                 <div className="text-center space-y-2">
@@ -392,7 +445,7 @@ export const ClassroomMode: React.FC<ClassroomModeProps> = ({ onClose }) => {
                     type="text"
                     maxLength={6}
                     required
-                    placeholder="e.g. 849201"
+                    placeholder="e.g. 558308"
                     value={inputCode}
                     onChange={(e) => setInputCode(e.target.value)}
                     className="w-full px-4 py-3 rounded-xl bg-slate-900 border border-slate-700 text-amber-400 font-mono text-center font-black text-2xl tracking-widest outline-none focus:border-amber-400"
@@ -404,7 +457,7 @@ export const ClassroomMode: React.FC<ClassroomModeProps> = ({ onClose }) => {
                   <input
                     type="text"
                     required
-                    placeholder="e.g. Aarav Sharma"
+                    placeholder="e.g. qwerty"
                     value={studentNameInput}
                     onChange={(e) => setStudentNameInput(e.target.value)}
                     className="w-full px-4 py-3 rounded-xl bg-slate-900 border border-slate-700 text-white text-sm outline-none focus:border-amber-400"
@@ -421,15 +474,77 @@ export const ClassroomMode: React.FC<ClassroomModeProps> = ({ onClose }) => {
             </div>
           )}
 
-          {gameStage === 'Playing' && (
-            <div className="space-y-6">
+          {/* STUDENT JOINING LOADING STATE */}
+          {studentStatus === 'JOINING' && (
+            <div className="py-16 text-center space-y-4 max-w-md mx-auto">
+              <Loader2 className="w-12 h-12 text-amber-400 animate-spin mx-auto" />
+              <h3 className="text-xl font-black text-white">Connecting to Classroom #{inputCode}...</h3>
+              <p className="text-xs text-slate-400">Verifying session and registering student device...</p>
+            </div>
+          )}
+
+          {/* STUDENT JOINED & WAITING FOR TEACHER (JOINED_WAITING) */}
+          {activeTab === 'StudentJoin' && studentStatus === 'JOINED_WAITING' && (
+            <div className="space-y-6 text-center py-4 max-w-md mx-auto animate-fadeIn">
+              <div className="w-16 h-16 mx-auto rounded-3xl bg-emerald-500/20 border border-emerald-500/40 flex items-center justify-center text-emerald-400 animate-pulse">
+                <CheckCircle2 className="w-8 h-8" />
+              </div>
+
+              <div className="space-y-2">
+                <div className="inline-block px-3 py-1 rounded-full bg-emerald-500/10 text-emerald-300 border border-emerald-500/30 text-xs font-black uppercase tracking-wider">
+                  ✓ Connected to Classroom
+                </div>
+                <h3 className="text-2xl font-black text-white">Joined Successfully!</h3>
+              </div>
+
+              {/* Exact Requested Waiting Card */}
+              <div className="p-6 rounded-3xl bg-slate-900 border-2 border-indigo-500/40 space-y-4 text-left shadow-xl">
+                <div className="text-center font-bold text-indigo-300 text-sm border-b border-slate-800 pb-3 uppercase tracking-wider">
+                  LIVE CLASSROOM
+                </div>
+
+                <div className="space-y-2 text-xs">
+                  <div className="flex items-center justify-between text-slate-300">
+                    <span className="font-semibold text-slate-400">Student:</span>
+                    <strong className="text-white font-bold">{myStudentInfo?.studentName || studentNameInput}</strong>
+                  </div>
+                  <div className="flex items-center justify-between text-slate-300">
+                    <span className="font-semibold text-slate-400">Room Code:</span>
+                    <strong className="text-amber-400 font-mono text-base">{inputCode || session?.roomCode}</strong>
+                  </div>
+                  <div className="flex items-center justify-between text-slate-300 pt-2 border-t border-slate-800">
+                    <span className="font-semibold text-slate-400">Connection Status:</span>
+                    <span className="text-emerald-400 font-bold flex items-center gap-1">
+                      <Wifi className="w-3.5 h-3.5 animate-pulse" /> Connected
+                    </span>
+                  </div>
+                </div>
+
+                <div className="p-4 rounded-2xl bg-indigo-950/60 border border-indigo-500/30 text-center space-y-1 animate-pulse">
+                  <div className="text-xs font-black text-indigo-200">Waiting for teacher to start the quiz...</div>
+                  <p className="text-[11px] text-slate-400">Please wait for the teacher to start. The quiz will begin automatically!</p>
+                </div>
+              </div>
+
+              <button
+                onClick={handleLeaveRoom}
+                className="text-xs text-rose-400 hover:text-rose-300 font-bold underline transition"
+              >
+                Leave Room / Exit Session
+              </button>
+            </div>
+          )}
+
+          {/* ACTIVE QUIZ ARENA (QUIZ_ACTIVE) */}
+          {(session?.gameStage === 'Playing' || studentStatus === 'QUIZ_ACTIVE') && (
+            <div className="space-y-6 animate-fadeIn">
               {/* Top Progress & Timer Bar */}
               <div className="flex items-center justify-between">
                 <span className="text-xs font-bold text-slate-400 uppercase tracking-wider bg-slate-900 px-3 py-1 rounded-full border border-slate-800">
                   Question {currentQIndex + 1} of {CLASSROOM_QUESTIONS.length}
                 </span>
 
-                <div className="flex items-center gap-2 px-3 py-1 rounded-full bg-amber-500/10 border border-amber-500/30 text-amber-400 font-extrabold text-sm">
+                <div className="flex items-center gap-2 px-3.5 py-1 rounded-full bg-amber-500/10 border border-amber-500/30 text-amber-400 font-extrabold text-sm shadow-md">
                   <Timer className={`w-4 h-4 ${timeLeft <= 5 ? 'animate-bounce text-rose-400' : ''}`} />
                   <span>{timeLeft}s</span>
                 </div>
@@ -437,7 +552,7 @@ export const ClassroomMode: React.FC<ClassroomModeProps> = ({ onClose }) => {
                 <div className="text-xs font-black text-amber-400">Score: {score} pts</div>
               </div>
 
-              {/* Question Text */}
+              {/* Question Card */}
               <div className="p-6 rounded-2xl bg-slate-900 border border-slate-800 space-y-2">
                 <span className="text-[10px] uppercase font-bold text-indigo-400 bg-indigo-500/10 px-2 py-0.5 rounded border border-indigo-500/20">
                   {currentQ.category}
@@ -475,7 +590,7 @@ export const ClassroomMode: React.FC<ClassroomModeProps> = ({ onClose }) => {
                 })}
               </div>
 
-              {/* Feedback Explanation */}
+              {/* Feedback Explanation & Teacher Control */}
               {isAnswered && (
                 <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800 text-xs text-slate-200 space-y-3 animate-fadeIn">
                   <div className="font-extrabold text-amber-300 flex items-center gap-1.5">
@@ -483,38 +598,41 @@ export const ClassroomMode: React.FC<ClassroomModeProps> = ({ onClose }) => {
                   </div>
                   <p className="leading-relaxed">{currentQ.explanation}</p>
 
-                  <button
-                    onClick={handleNextQuestion}
-                    className="w-full py-3.5 rounded-2xl bg-indigo-600 hover:bg-indigo-500 text-white font-black text-xs transition shadow-xl shadow-indigo-600/20"
-                  >
-                    {currentQIndex < CLASSROOM_QUESTIONS.length - 1 ? 'Next Question ▶' : 'View Final Quiz Leaderboard'}
-                  </button>
+                  {activeTab === 'TeacherHost' && (
+                    <button
+                      onClick={handleNextQuestion}
+                      className="w-full py-3.5 rounded-2xl bg-indigo-600 hover:bg-indigo-500 text-white font-black text-xs transition shadow-xl shadow-indigo-600/20"
+                    >
+                      {currentQIndex < CLASSROOM_QUESTIONS.length - 1 ? 'Next Question ▶' : 'View Final Quiz Leaderboard'}
+                    </button>
+                  )}
                 </div>
               )}
             </div>
           )}
 
-          {gameStage === 'Finished' && (
-            <div className="space-y-6 text-center py-4">
+          {/* QUIZ FINISHED (QUIZ_FINISHED) */}
+          {(session?.gameStage === 'Finished' || studentStatus === 'QUIZ_FINISHED') && (
+            <div className="space-y-6 text-center py-4 animate-fadeIn">
               <div className="w-20 h-20 mx-auto rounded-3xl bg-amber-500/20 border border-amber-500/40 flex items-center justify-center text-amber-400">
                 <Trophy className="w-10 h-10" />
               </div>
 
               <div className="space-y-2">
                 <h3 className="text-2xl sm:text-3xl font-black text-white">Classroom Live Quiz Completed! 🎉</h3>
-                <p className="text-xs text-slate-300">Great job! Scores have been synced to the teacher's smartboard leaderboard.</p>
+                <p className="text-xs text-slate-300">Great job! All scores have been logged to the smartboard leaderboard.</p>
               </div>
 
               <div className="p-6 rounded-2xl bg-slate-900 border border-slate-800 max-w-xs mx-auto">
-                <div className="text-xs font-bold text-slate-400 uppercase">Your Live Quiz Score</div>
+                <div className="text-xs font-bold text-slate-400 uppercase">Your Final Quiz Score</div>
                 <div className="text-4xl font-black text-amber-400">{score} pts</div>
               </div>
 
               <button
-                onClick={handleRestart}
+                onClick={handleLeaveRoom}
                 className="w-full max-w-xs mx-auto py-3.5 rounded-2xl bg-indigo-600 hover:bg-indigo-500 text-white font-black text-xs transition shadow-xl shadow-indigo-600/20"
               >
-                Return to Classroom Lobby
+                Exit Classroom Session
               </button>
             </div>
           )}
