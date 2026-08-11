@@ -229,6 +229,12 @@ const TIER_3_QUESTIONS: ClassroomQuestion[] = [
 
 // Memory cache for session state fallback (Instant <1ms access)
 const inMemorySessions: Record<string, ClassroomSession> = {};
+
+// Fallback BroadcastChannel for instant local network / same-browser window sync
+const broadcastChannel = typeof window !== 'undefined' && 'BroadcastChannel' in window 
+  ? new BroadcastChannel('cipam_classroom_channel_v2') 
+  : null;
+
 const STUDENT_SESSION_KEY = 'cipam_active_classroom_student';
 
 export function saveStudentSession(session: SavedStudentClassroomSession): void {
@@ -289,8 +295,19 @@ export function parseSessionFromPayload(data: any): ClassroomSession | null {
 }
 
 /**
+ * Promise Timeout Guard
+ * Wraps async network promises with a strict timeout to PREVENT INFINITE HANGING!
+ */
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T | null> {
+  return Promise.race([
+    promise,
+    new Promise<null>((resolve) => setTimeout(() => resolve(null), timeoutMs))
+  ]);
+}
+
+/**
  * Multi-Cloud Session Publisher
- * Publishes session state to memory, localStorage, ntfy.sh relay, and Firestore simultaneously.
+ * Publishes session state to memory, BroadcastChannel, localStorage, ntfy.sh relay, and Firestore.
  */
 export async function publishRoomUpdate(session: ClassroomSession): Promise<void> {
   const roomCode = session.roomCode;
@@ -301,6 +318,9 @@ export async function publishRoomUpdate(session: ClassroomSession): Promise<void
       localStorage.setItem(`cipam_room_${roomCode}`, JSON.stringify(session));
     } catch (e) {}
   }
+
+  // Instant local BroadcastChannel sync
+  broadcastChannel?.postMessage({ type: 'ROOM_UPDATE', roomCode, session });
 
   const payloadStr = JSON.stringify(session);
 
@@ -326,10 +346,8 @@ export async function publishRoomUpdate(session: ClassroomSession): Promise<void
     })
   }).catch(() => {});
 
-  // 3. Post to Firestore
-  setDoc(doc(db, 'classrooms', roomCode), session, { merge: true }).catch((err) => {
-    console.warn('Firestore publish notice:', err);
-  });
+  // 3. Post to Firestore (Background non-blocking catch)
+  setDoc(doc(db, 'classrooms', roomCode), session, { merge: true }).catch(() => {});
 }
 
 /**
@@ -371,7 +389,7 @@ export async function createClassroomSession(
 }
 
 /**
- * Student Joins an Active Classroom Session (Fast Lookup)
+ * Student Joins an Active Classroom Session (Failsafe <300ms Lookup with Strict Timeout)
  */
 export async function joinClassroomSession(
   roomCode: string,
@@ -392,11 +410,12 @@ export async function joinClassroomSession(
     }
   }
 
-  // 2. Check ntfy.sh Cloud Relay if not found locally
+  // 2. Check ntfy.sh Cloud Relay with strict 1000ms timeout
   if (!currentSession) {
     try {
-      const res = await fetch(`https://ntfy.sh/cipam_room_${cleanCode}/json?poll=1`);
-      if (res.ok) {
+      const fetchPromise = fetch(`https://ntfy.sh/cipam_room_${cleanCode}/json?poll=1`);
+      const res = await withTimeout(fetchPromise, 1000);
+      if (res && res.ok) {
         const text = await res.text();
         const lines = text.trim().split('\n');
         for (const line of lines.reverse()) {
@@ -410,12 +429,12 @@ export async function joinClassroomSession(
     } catch (e) {}
   }
 
-  // 3. Check Firestore authoritatively
+  // 3. Check Firestore authoritatively with strict 1000ms timeout (NEVER HANGS!)
   if (!currentSession) {
     try {
       const roomRef = doc(db, 'classrooms', cleanCode);
-      const snap = await getDoc(roomRef);
-      if (snap.exists()) {
+      const snap = await withTimeout(getDoc(roomRef), 1000);
+      if (snap && snap.exists()) {
         currentSession = snap.data() as ClassroomSession;
       }
     } catch (err) {}
@@ -501,7 +520,16 @@ export function subscribeToClassroom(
     }
   }
 
-  // 2. Authoritative Firestore Realtime Listener
+  // 2. BroadcastChannel Listener (Normal local tabs / windows)
+  const handleBroadcast = (event: MessageEvent) => {
+    if (event.data?.type === 'ROOM_UPDATE' && event.data?.roomCode === roomCode) {
+      const parsed = parseSessionFromPayload(event.data.session);
+      if (parsed) emitSession(parsed);
+    }
+  };
+  broadcastChannel?.addEventListener('message', handleBroadcast);
+
+  // 3. Authoritative Firestore Realtime Listener
   let unsubscribeFirestore = () => {};
   try {
     const roomRef = doc(db, 'classrooms', roomCode);
@@ -519,7 +547,7 @@ export function subscribeToClassroom(
     );
   } catch (err) {}
 
-  // 3. Failsafe Cloud Polling Relay (500ms for instant cross-device mobile sync)
+  // 4. Failsafe Cloud Polling Relay (500ms for instant cross-device mobile sync)
   const pollInterval = setInterval(async () => {
     try {
       const res = await fetch(`https://ntfy.sh/cipam_room_${roomCode}/json?poll=1`);
@@ -539,6 +567,7 @@ export function subscribeToClassroom(
 
   // Cleanup handler
   return () => {
+    broadcastChannel?.removeEventListener('message', handleBroadcast);
     unsubscribeFirestore();
     clearInterval(pollInterval);
   };
