@@ -1,4 +1,4 @@
-import { db, doc, setDoc, getDoc, onSnapshot, updateDoc, collection, getDocs } from './firebase';
+import { db, doc, setDoc, getDoc, onSnapshot, collection, getDocs } from './firebase';
 
 export interface ClassroomQuestion {
   id: number;
@@ -251,14 +251,85 @@ export function clearStudentSession(): void {
   } catch (e) {}
 }
 
-/**
- * Question Bank Generator
- * Returns rich curated questions instantly (<1ms), preventing network timeouts on room creation.
- */
 export function getCuratedQuestions(tier: 1 | 2 | 3): ClassroomQuestion[] {
   if (tier === 2) return TIER_2_QUESTIONS;
   if (tier === 3) return TIER_3_QUESTIONS;
   return TIER_1_QUESTIONS;
+}
+
+/**
+ * Universal Session Payload Parser
+ * Safely extracts ClassroomSession from raw JSON, ntfy message strings, or RESTful API dev objects.
+ */
+export function parseSessionFromPayload(data: any): ClassroomSession | null {
+  if (!data) return null;
+
+  if (typeof data === 'object') {
+    if (data.roomCode && data.questions) return data as ClassroomSession;
+    if (data.data && data.data.roomCode) return data.data as ClassroomSession;
+  }
+
+  if (typeof data === 'string') {
+    try {
+      const parsed = JSON.parse(data);
+      if (parsed.roomCode && parsed.questions) return parsed as ClassroomSession;
+      if (parsed.data && parsed.data.roomCode) return parsed.data as ClassroomSession;
+      if (parsed.message) {
+        if (typeof parsed.message === 'object' && parsed.message.roomCode) return parsed.message;
+        if (typeof parsed.message === 'string') {
+          const inner = JSON.parse(parsed.message);
+          if (inner.roomCode && inner.questions) return inner as ClassroomSession;
+          if (inner.data && inner.data.roomCode) return inner.data as ClassroomSession;
+        }
+      }
+    } catch (e) {}
+  }
+
+  return null;
+}
+
+/**
+ * Multi-Cloud Session Publisher
+ * Publishes session state to memory, localStorage, ntfy.sh relay, and Firestore simultaneously.
+ */
+export async function publishRoomUpdate(session: ClassroomSession): Promise<void> {
+  const roomCode = session.roomCode;
+  inMemorySessions[roomCode] = session;
+
+  if (typeof window !== 'undefined') {
+    try {
+      localStorage.setItem(`cipam_room_${roomCode}`, JSON.stringify(session));
+    } catch (e) {}
+  }
+
+  const payloadStr = JSON.stringify(session);
+
+  // 1. Post to ntfy.sh with clean message field
+  fetch(`https://ntfy.sh/cipam_room_${roomCode}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      topic: `cipam_room_${roomCode}`,
+      title: 'ROOM_UPDATE',
+      message: payloadStr
+    })
+  }).catch(() => {});
+
+  // 2. Post to api.restful-api.dev object store fallback
+  fetch(`https://api.restful-api.dev/objects`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      id: `cipam_room_${roomCode}`,
+      name: `cipam_room_${roomCode}`,
+      data: session
+    })
+  }).catch(() => {});
+
+  // 3. Post to Firestore
+  setDoc(doc(db, 'classrooms', roomCode), session, { merge: true }).catch((err) => {
+    console.warn('Firestore publish notice:', err);
+  });
 }
 
 /**
@@ -293,26 +364,9 @@ export async function createClassroomSession(
     students: []
   };
 
-  // 1. Save in Memory & Local Storage INSTANTLY
-  inMemorySessions[roomCode] = newSession;
-  if (typeof window !== 'undefined') {
-    try {
-      localStorage.setItem(`cipam_room_${roomCode}`, JSON.stringify(newSession));
-    } catch (e) {}
-  }
+  // Publish session to all cloud channels instantly
+  await publishRoomUpdate(newSession);
 
-  // 2. Dispatch Firestore & Cloud updates asynchronously in background (Non-blocking!)
-  setDoc(doc(db, 'classrooms', roomCode), newSession).catch((err) => {
-    console.warn('Firestore background sync notice:', err);
-  });
-
-  fetch(`https://ntfy.sh/cipam_room_${roomCode}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'Title': 'ROOM_UPDATE' },
-    body: JSON.stringify(newSession)
-  }).catch(() => {});
-
-  // Return new session INSTANTLY so room code displays immediately!
   return newSession;
 }
 
@@ -334,13 +388,29 @@ export async function joinClassroomSession(
   } else if (typeof window !== 'undefined') {
     const localData = localStorage.getItem(`cipam_room_${cleanCode}`);
     if (localData) {
-      try {
-        currentSession = JSON.parse(localData);
-      } catch (e) {}
+      currentSession = parseSessionFromPayload(localData);
     }
   }
 
-  // 2. Check Firestore authoritatively if not found in memory
+  // 2. Check ntfy.sh Cloud Relay if not found locally
+  if (!currentSession) {
+    try {
+      const res = await fetch(`https://ntfy.sh/cipam_room_${cleanCode}/json?poll=1`);
+      if (res.ok) {
+        const text = await res.text();
+        const lines = text.trim().split('\n');
+        for (const line of lines.reverse()) {
+          const parsed = parseSessionFromPayload(line);
+          if (parsed && parsed.roomCode === cleanCode) {
+            currentSession = parsed;
+            break;
+          }
+        }
+      }
+    } catch (e) {}
+  }
+
+  // 3. Check Firestore authoritatively
   if (!currentSession) {
     try {
       const roomRef = doc(db, 'classrooms', cleanCode);
@@ -349,29 +419,6 @@ export async function joinClassroomSession(
         currentSession = snap.data() as ClassroomSession;
       }
     } catch (err) {}
-  }
-
-  // 3. Check Cloud Relay if still not found
-  if (!currentSession) {
-    try {
-      const res = await fetch(`https://ntfy.sh/cipam_room_${cleanCode}/json?poll=1`);
-      if (res.ok) {
-        const text = await res.text();
-        const lines = text.trim().split('\n');
-        for (const line of lines.reverse()) {
-          try {
-            const parsed = JSON.parse(line);
-            if (parsed.message) {
-              const sess = JSON.parse(parsed.message) as ClassroomSession;
-              if (sess && sess.roomCode === cleanCode) {
-                currentSession = sess;
-                break;
-              }
-            }
-          } catch (e) {}
-        }
-      }
-    } catch (e) {}
   }
 
   if (!currentSession) {
@@ -402,21 +449,8 @@ export async function joinClassroomSession(
     students: updatedStudents
   };
 
-  // Update memory state & local storage
-  inMemorySessions[cleanCode] = updatedSession;
-  if (typeof window !== 'undefined') {
-    try {
-      localStorage.setItem(`cipam_room_${cleanCode}`, JSON.stringify(updatedSession));
-    } catch (e) {}
-  }
-
-  // Asynchronously dispatch updates to Firestore & Cloud Relay
-  setDoc(doc(db, 'classrooms', cleanCode), updatedSession, { merge: true }).catch(() => {});
-  fetch(`https://ntfy.sh/cipam_room_${cleanCode}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(updatedSession)
-  }).catch(() => {});
+  // Publish updated session to all cloud channels
+  await publishRoomUpdate(updatedSession);
 
   // Save student session for auto-reconnect
   saveStudentSession({
@@ -431,7 +465,7 @@ export async function joinClassroomSession(
 }
 
 /**
- * Subscribes to Realtime Classroom Session Updates (Single Authoritative Listener)
+ * Subscribes to Realtime Classroom Session Updates (Multi-Cloud Relay Listener)
  */
 export function subscribeToClassroom(
   roomCode: string,
@@ -462,9 +496,8 @@ export function subscribeToClassroom(
   } else if (typeof window !== 'undefined') {
     const localData = localStorage.getItem(`cipam_room_${roomCode}`);
     if (localData) {
-      try {
-        emitSession(JSON.parse(localData));
-      } catch (e) {}
+      const parsed = parseSessionFromPayload(localData);
+      if (parsed) emitSession(parsed);
     }
   }
 
@@ -476,7 +509,8 @@ export function subscribeToClassroom(
       roomRef,
       (snapshot) => {
         if (snapshot.exists()) {
-          emitSession(snapshot.data() as ClassroomSession);
+          const parsed = parseSessionFromPayload(snapshot.data());
+          if (parsed) emitSession(parsed);
         }
       },
       (err) => {
@@ -485,7 +519,7 @@ export function subscribeToClassroom(
     );
   } catch (err) {}
 
-  // 3. Failsafe Cloud Polling Relay (800ms)
+  // 3. Failsafe Cloud Polling Relay (500ms for instant cross-device mobile sync)
   const pollInterval = setInterval(async () => {
     try {
       const res = await fetch(`https://ntfy.sh/cipam_room_${roomCode}/json?poll=1`);
@@ -493,20 +527,15 @@ export function subscribeToClassroom(
         const text = await res.text();
         const lines = text.trim().split('\n');
         for (const line of lines.reverse()) {
-          try {
-            const parsed = JSON.parse(line);
-            if (parsed.message) {
-              const sess = JSON.parse(parsed.message) as ClassroomSession;
-              if (sess && sess.roomCode === roomCode) {
-                emitSession(sess);
-                break;
-              }
-            }
-          } catch (e) {}
+          const parsed = parseSessionFromPayload(line);
+          if (parsed && parsed.roomCode === roomCode) {
+            emitSession(parsed);
+            break;
+          }
         }
       }
     } catch (e) {}
-  }, 800);
+  }, 500);
 
   // Cleanup handler
   return () => {
@@ -528,9 +557,8 @@ export async function updateRoomStage(
   if (!currentSession && typeof window !== 'undefined') {
     const localData = localStorage.getItem(`cipam_room_${roomCode}`);
     if (localData) {
-      try {
-        currentSession = JSON.parse(localData);
-      } catch (e) {}
+      const parsed = parseSessionFromPayload(localData);
+      if (parsed) currentSession = parsed;
     }
   }
 
@@ -543,19 +571,7 @@ export async function updateRoomStage(
     questionStartedAt: Date.now()
   };
 
-  inMemorySessions[roomCode] = updatedSession;
-  if (typeof window !== 'undefined') {
-    try {
-      localStorage.setItem(`cipam_room_${roomCode}`, JSON.stringify(updatedSession));
-    } catch (e) {}
-  }
-
-  setDoc(doc(db, 'classrooms', roomCode), updatedSession, { merge: true }).catch(() => {});
-  fetch(`https://ntfy.sh/cipam_room_${roomCode}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(updatedSession)
-  }).catch(() => {});
+  await publishRoomUpdate(updatedSession);
 }
 
 /**
@@ -569,7 +585,16 @@ export async function submitStudentAnswer(
   earnedPoints: number,
   isCorrect: boolean
 ): Promise<void> {
-  const session = inMemorySessions[roomCode];
+  let session = inMemorySessions[roomCode];
+
+  if (!session && typeof window !== 'undefined') {
+    const localData = localStorage.getItem(`cipam_room_${roomCode}`);
+    if (localData) {
+      const parsed = parseSessionFromPayload(localData);
+      if (parsed) session = parsed;
+    }
+  }
+
   if (!session) return;
 
   const updatedStudents = (session.students || []).map((st) => {
@@ -593,19 +618,7 @@ export async function submitStudentAnswer(
     students: updatedStudents
   };
 
-  inMemorySessions[roomCode] = updatedSession;
-  if (typeof window !== 'undefined') {
-    try {
-      localStorage.setItem(`cipam_room_${roomCode}`, JSON.stringify(updatedSession));
-    } catch (e) {}
-  }
-
-  updateDoc(doc(db, 'classrooms', roomCode), { students: updatedStudents }).catch(() => {});
-  fetch(`https://ntfy.sh/cipam_room_${roomCode}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(updatedSession)
-  }).catch(() => {});
+  await publishRoomUpdate(updatedSession);
 }
 
 /**
