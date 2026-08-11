@@ -115,11 +115,11 @@ export const ClassroomMode: React.FC<ClassroomModeProps> = ({ onClose }) => {
       setSession(updatedSession);
 
       // Student sync stage & question index from Teacher
-      if (activeTab === 'StudentJoin' && joinSuccess) {
-        if (updatedSession.gameStage !== gameStage) {
+      if (activeTab === 'StudentJoin') {
+        if (updatedSession.gameStage && updatedSession.gameStage !== gameStage) {
           setGameStage(updatedSession.gameStage);
         }
-        if (updatedSession.currentQIndex !== currentQIndex) {
+        if (typeof updatedSession.currentQIndex === 'number' && updatedSession.currentQIndex !== currentQIndex) {
           setCurrentQIndex(updatedSession.currentQIndex);
           setSelectedOption(null);
           setIsAnswered(false);
@@ -129,7 +129,7 @@ export const ClassroomMode: React.FC<ClassroomModeProps> = ({ onClose }) => {
     });
 
     return () => unsubscribe();
-  }, [targetRoomCode, activeTab, joinSuccess, gameStage, currentQIndex]);
+  }, [targetRoomCode, activeTab, gameStage, currentQIndex]);
 
   // Timer effect during play
   useEffect(() => {
@@ -432,14 +432,24 @@ export const ClassroomMode: React.FC<ClassroomModeProps> = ({ onClose }) => {
                   <div className="space-y-2">
                     <h3 className="text-2xl font-black text-white">Connected to Room #{inputCode}!</h3>
                     <p className="text-xs text-slate-300">
-                      Welcome, <strong className="text-amber-400">{studentNameInput || 'Student'}</strong>! Waiting for teacher to press <strong>Start Quiz</strong> on the smartboard...
+                      Welcome, <strong className="text-amber-400">{studentNameInput || myStudentInfo?.studentName || 'Student'}</strong>! You are connected to the live classroom.
                     </p>
                   </div>
 
                   <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800 text-xs text-slate-400 flex items-center justify-center gap-2">
                     <Wifi className="w-4 h-4 text-emerald-400 animate-pulse" />
-                    <span>Real-time Sync Active • Standby for Question 1</span>
+                    <span>Real-time Network Synced • Ready for Live Questions</span>
                   </div>
+
+                  <button
+                    onClick={() => {
+                      soundFx.playClick();
+                      setGameStage('Playing');
+                    }}
+                    className="w-full py-4 rounded-2xl bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-slate-950 font-black text-sm transition shadow-xl shadow-emerald-500/20 flex items-center justify-center gap-2"
+                  >
+                    <Play className="w-4 h-4 fill-slate-950" /> Enter Live Question Arena ▶
+                  </button>
                 </div>
               )}
             </div>
